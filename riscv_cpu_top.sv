@@ -1,0 +1,464 @@
+`include "defines.sv"
+`include "pipeline_regs.sv"
+
+// riscv_cpu_top.sv - CPU顶层模块
+module riscv_cpu_top (
+    input wire clk_50M,     // 50MHz 时钟输入
+    input wire clk_11M0592, // 11.0592MHz 时钟输入（备用，可不用）
+
+    input wire push_btn,  // BTN5 按钮开关，带消抖电路，按下时为 1
+    input wire reset_btn, // BTN6 复位按钮，带消抖电路，按下时为 1
+
+    input  wire [ 3:0] touch_btn,  // BTN1~BTN4，按钮开关，按下时为 1
+    input  wire [31:0] dip_sw,     // 32 位拨码开关，拨到“ON”时为 1
+    output wire [15:0] leds,       // 16 位 LED，输出时 1 点亮
+    output wire [ 7:0] dpy0,       // 数码管低位信号，包括小数点，输出 1 点亮
+    output wire [ 7:0] dpy1,       // 数码管高位信号，包括小数点，输出 1 点亮
+
+    // CPLD 串口控制器信号
+    output wire uart_rdn,        // 读串口信号，低有效
+    output wire uart_wrn,        // 写串口信号，低有效
+    input  wire uart_dataready,  // 串口数据准备好
+    input  wire uart_tbre,       // 发送数据标志
+    input  wire uart_tsre,       // 数据发送完毕标志
+
+    // BaseRAM 信号
+    inout wire [31:0] base_ram_data,  // BaseRAM 数据，低 8 位与 CPLD 串口控制器共享
+    output wire [19:0] base_ram_addr,  // BaseRAM 地址
+    output wire [3:0] base_ram_be_n,  // BaseRAM 字节使能，低有效。如果不使用字节使能，请保持为 0
+    output wire base_ram_ce_n,  // BaseRAM 片选，低有效
+    output wire base_ram_oe_n,  // BaseRAM 读使能，低有效
+    output wire base_ram_we_n,  // BaseRAM 写使能，低有效
+
+    // ExtRAM 信号
+    inout wire [31:0] ext_ram_data,  // ExtRAM 数据
+    output wire [19:0] ext_ram_addr,  // ExtRAM 地址
+    output wire [3:0] ext_ram_be_n,  // ExtRAM 字节使能，低有效。如果不使用字节使能，请保持为 0
+    output wire ext_ram_ce_n,  // ExtRAM 片选，低有效
+    output wire ext_ram_oe_n,  // ExtRAM 读使能，低有效
+    output wire ext_ram_we_n,  // ExtRAM 写使能，低有效
+
+    // 直连串口信号
+    output wire txd,  // 直连串口发送端
+    input  wire rxd,  // 直连串口接收端
+
+    // Flash 存储器信号，参考 JS28F640 芯片手册
+    output wire [22:0] flash_a,  // Flash 地址，a0 仅在 8bit 模式有效，16bit 模式无意义
+    inout wire [15:0] flash_d,  // Flash 数据
+    output wire flash_rp_n,  // Flash 复位信号，低有效
+    output wire flash_vpen,  // Flash 写保护信号，低电平时不能擦除、烧写
+    output wire flash_ce_n,  // Flash 片选信号，低有效
+    output wire flash_oe_n,  // Flash 读使能信号，低有效
+    output wire flash_we_n,  // Flash 写使能信号，低有效
+    output wire flash_byte_n, // Flash 8bit 模式选择，低有效。在使用 flash 的 16 位模式时请设为 1
+
+    // USB 控制器信号，参考 SL811 芯片手册
+    output wire sl811_a0,
+    // inout  wire [7:0] sl811_d,     // USB 数据线与网络控制器的 dm9k_sd[7:0] 共享
+    output wire sl811_wr_n,
+    output wire sl811_rd_n,
+    output wire sl811_cs_n,
+    output wire sl811_rst_n,
+    output wire sl811_dack_n,
+    input  wire sl811_intrq,
+    input  wire sl811_drq_n,
+
+    // 网络控制器信号，参考 DM9000A 芯片手册
+    output wire dm9k_cmd,
+    inout wire [15:0] dm9k_sd,
+    output wire dm9k_iow_n,
+    output wire dm9k_ior_n,
+    output wire dm9k_cs_n,
+    output wire dm9k_pwrst_n,
+    input wire dm9k_int,
+
+    // 图像输出信号
+    output wire [2:0] video_red,    // 红色像素，3 位
+    output wire [2:0] video_green,  // 绿色像素，3 位
+    output wire [1:0] video_blue,   // 蓝色像素，2 位
+    output wire       video_hsync,  // 行同步（水平同步）信号
+    output wire       video_vsync,  // 场同步（垂直同步）信号
+    output wire       video_clk,    // 像素时钟输出
+    output wire       video_de      // 行数据有效信号，用于区分消隐区
+);
+
+`ifdef SIMULATION
+    logic reset_of_clk10M;
+    initial begin
+    #10ns;
+    reset_of_clk10M = 1'b1;
+    #100ns;
+    reset_of_clk10M = 1'b0;
+    end
+    logic clk_10M;
+    assign clk_10M=clk_11M0592;
+`else
+
+    // PLL 分频示例
+    logic locked, clk_10M, clk_20M;
+    pll_example clock_gen (
+        // Clock in ports
+        .clk_in1(clk_50M),  // 外部时钟输入
+        // Clock out ports
+        .clk_out1(clk_10M),  // 时钟输出 1，频率在 IP 配置界面中设置
+        .clk_out2(clk_20M),  // 时钟输出 2，频率在 IP 配置界面中设置
+        // Status and control signals
+        .reset(reset_btn),  // PLL 复位输入
+        .locked(locked)  // PLL 锁定指示输出，"1"表示时钟稳定，
+                        // 后级电路复位信号应当由它生成（见下）
+    );
+
+    logic reset_of_clk10M;
+    // 异步复位，同步释放，将 locked 信号转为后级电路的复位 reset_of_clk10M
+    always_ff @(posedge clk_10M or negedge locked) begin
+    if (~locked) reset_of_clk10M <= 1'b1;
+    else reset_of_clk10M <= 1'b0;
+    end
+
+`endif
+
+    logic sys_clk;
+    logic sys_rst;
+
+    assign sys_clk = clk_10M;
+    assign sys_rst = reset_of_clk10M;
+  
+    // 本实验不使用 CPLD 串口，禁用防止总线冲突
+    assign uart_rdn = 1'b1;
+    assign uart_wrn = 1'b1;
+
+    // Wishbone Interfaces
+    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_master_intf();
+    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_slave0_intf(); // For sram_controller_base
+    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_slave1_intf(); // For sram_controller_ext
+    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_slave2_intf(); // For uart_controller
+
+    // Internal Wishbone Interfaces for IF and MEM stages
+    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_inst();
+    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_data();
+
+    // wb_inst and wb_data are connected to wishbone_master
+    // wb_master_intf is connected to wb_mux
+    // wb_mux is connected to wb_slave0, wb_slave1, wb_slave2
+    // wb_slave0 is connected to sram_controller_base
+    // wb_slave1 is connected to sram_controller_ext
+    // wb_slave2 is connected to uart_controller
+    // wishbone_master的作用是将wb_inst和wb_data的信号进行仲裁，然后将
+    // 选中的信号输出到wb_out，wb_out连接到wb_mux的slave接口
+    // wb_mux的作用是将wb_out的信号分发到wb_slave0, wb_slave1, wb_slave2
+    // wb_slave0, wb_slave1, wb_slave2分别连接到sram_controller_base, sram_controller_ext, uart_controller
+    // sram_controller_base连接到基地址为0x8000_0000的SRAM
+    // sram_controller_ext连接到基地址为0x8040_0000的SRAM
+    // uart_controller连接到基地址为0x1000_0000的UART
+    
+    /* ===========  Wishbone Master begin =========== */
+    // Wishbone Master => Wishbone MUX (Slave)
+
+    wishbone_master #(
+        .ADDR_WIDTH(32),
+        .DATA_WIDTH(32)
+    ) u_wishbone_master (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+
+        // Inputs from pipeline
+        .wb_inst(wb_inst.slave),
+        .wb_data(wb_data.slave),
+
+        // Output to bus
+        .wb_out(wb_master_intf.master)
+    );
+
+    /* =========== Wishbone Master end =========== */
+
+    /* =========== Wishbone MUX begin =========== */
+    // Wishbone MUX (Masters) => bus slaves
+
+    wb_mux_3 wb_mux (
+        .clk(sys_clk),
+        .rst(sys_rst),
+
+        // Master interface (to wishbone master)
+        .wb_master_if(wb_master_intf.slave), // MUX acts as a slave to the master
+
+        // Slave interface 0 (to BaseRAM controller)
+        // Address range: 0x8000_0000 ~ 0x803F_FFFF
+        .wbs0_addr    (32'h8000_0000),
+        .wbs0_addr_msk(32'hFFC0_0000),
+        .wb_slave0_if(wb_slave0_intf.master), // MUX acts as a master to the slave
+
+        // Slave interface 1 (to ExtRAM controller)
+        // Address range: 0x8040_0000 ~ 0x807F_FFFF
+        .wbs1_addr    (32'h8040_0000),
+        .wbs1_addr_msk(32'hFFC0_0000),
+        .wb_slave1_if(wb_slave1_intf.master), // MUX acts as a master to the slave
+
+        // Slave interface 2 (to UART controller)
+        // Address range: 0x1000_0000 ~ 0x1000_FFFF
+        .wbs2_addr    (32'h1000_0000),
+        .wbs2_addr_msk(32'hFFFF_0000),
+        .wb_slave2_if(wb_slave2_intf.master)  // MUX acts as a master to the slave
+    );
+
+    /* =========== Wishbone MUX end =========== */
+
+    /* =========== Wishbone Slaves begin =========== */
+    sram_controller #(
+        .SRAM_ADDR_WIDTH(20),
+        .SRAM_DATA_WIDTH(32)
+    ) sram_controller_base (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+
+        // Wishbone slave (to MUX)
+        .wb_if(wb_slave0_intf.slave),
+
+        // To SRAM chip
+        .sram_addr(base_ram_addr),
+        .sram_data(base_ram_data),
+        .sram_ce_n(base_ram_ce_n),
+        .sram_oe_n(base_ram_oe_n),
+        .sram_we_n(base_ram_we_n),
+        .sram_be_n(base_ram_be_n)
+    );
+
+    sram_controller #(
+        .SRAM_ADDR_WIDTH(20),
+        .SRAM_DATA_WIDTH(32)
+    ) sram_controller_ext (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+
+        // Wishbone slave (to MUX)
+        .wb_if(wb_slave1_intf.slave),
+
+        // To SRAM chip
+        .sram_addr(ext_ram_addr),
+        .sram_data(ext_ram_data),
+        .sram_ce_n(ext_ram_ce_n),
+        .sram_oe_n(ext_ram_oe_n),
+        .sram_we_n(ext_ram_we_n),
+        .sram_be_n(ext_ram_be_n)
+    );
+
+    // 串口控制器模块
+    // NOTE: 如果修改系统时钟频率，也需要修改此处的时钟频率参数
+    uart_controller #(
+        .CLK_FREQ(10_000_000),
+        .BAUD    (115200)
+    ) uart_controller (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+
+        .wb_if(wb_slave2_intf.slave),
+
+        // to UART pins
+        .uart_txd_o(txd),
+        .uart_rxd_i(rxd)
+    );
+
+    /* =========== Wishbone Slaves end =========== */
+
+    // ==================== 内部信号定义 ====================
+    
+    // PC和分支预测
+    logic [31:0] pc, next_pc;
+    logic [31:0] predicted_pc;
+    logic        prediction_valid;
+    logic        branch_mispredict;
+    logic [31:0] correct_pc;
+
+    // 流水线控制信号
+    logic        hazard_stall; 
+    logic        mem_stall;    
+    logic [4:0]  flush_mask;  // 每级流水线的flush信号
+
+    // ID stage branch signals
+    logic        branch_redirect_id;
+    logic [31:0] branch_target_id;
+
+    // Memory wait signals
+    logic inst_mem_wait;
+    logic data_mem_wait;
+
+    assign inst_mem_wait = wb_inst.cyc && wb_inst.stb && !wb_inst.ack;
+    assign data_mem_wait = wb_data.cyc && wb_data.stb && !wb_data.ack;
+    
+    // ==================== 流水线寄存器 ====================
+    
+    if_id_reg_t if_id_reg, if_id_next;
+    id_ex_reg_t id_ex_reg, id_ex_next;
+    ex_mem_reg_t ex_mem_reg, ex_mem_next;
+    mem_wb_reg_t mem_wb_reg, mem_wb_next;
+    
+    // ==================== 模块实例化 ====================
+    
+    // 取指令级
+    if_stage u_if_stage (
+        .clk            (sys_clk),
+        .rst           (sys_rst),
+        .stall          (hazard_stall || mem_stall), // Stall signal for IF stage (mostly for debug/trace)
+        .flush          (flush_mask[0]),
+        .if_id_next     (if_id_next),
+        .pc             (pc),                   //in
+        .ex_pc          (id_ex_reg.pc),         //in
+        .next_pc        (next_pc),               //out
+        .predicted_pc   (predicted_pc),        //out
+        .prediction_valid(prediction_valid),    //out
+        .branch_mispredict(branch_mispredict), //in
+        .correct_pc     (correct_pc),           //in
+        .ex_is_branch   (id_ex_reg.is_branch),  //in
+        .branch_redirect_id(branch_redirect_id),      //in
+        .branch_target_id(branch_target_id),    //in
+        .wb_master      (wb_inst.master)
+    );
+    
+    // 译码级
+    id_stage u_id_stage (
+        .clk            (sys_clk),
+        .rst           (sys_rst),
+        .stall          (hazard_stall || mem_stall),
+        .flush          (flush_mask[1]),
+        .if_id_reg      (if_id_reg),
+        .id_ex_next     (id_ex_next),
+        // 寄存器堆接口
+        .wb_rd          (mem_wb_reg.rd),    //写回的目的寄存器号
+        .reg_write_data (mem_wb_reg.mem_to_reg ? mem_wb_reg.mem_data : mem_wb_reg.alu_result),  //写回的数据
+        .wb_enable      (mem_wb_reg.reg_write && mem_wb_reg.valid), //写回使能
+        // Forwarding inputs for early branch
+        .ex_mem_fwd_in  (ex_mem_reg),
+        .mem_wb_fwd_in  (mem_wb_reg),
+        // Early branch resolution
+        .branch_redirect_id  (branch_redirect_id),
+        .branch_target_id (branch_target_id)
+    );
+
+    // 执行级
+    ex_stage u_ex_stage (
+        .clk            (sys_clk),
+        .rst           (sys_rst),
+        .flush          (flush_mask[2]),
+        .id_ex_reg      (id_ex_reg),
+        .ex_mem_next    (ex_mem_next),
+        // 转发接口
+        .fwd_ex_data    (ex_mem_reg.alu_result),
+        .fwd_mem_data   (mem_wb_reg.mem_to_reg ? mem_wb_reg.mem_data : mem_wb_reg.alu_result),
+        .fwd_ex_valid   (ex_mem_reg.reg_write && ex_mem_reg.valid),
+        .fwd_mem_valid  (mem_wb_reg.reg_write && mem_wb_reg.valid),
+        .fwd_ex_rd      (ex_mem_reg.rd),
+        .fwd_mem_rd     (mem_wb_reg.rd),
+        // 分支结果
+        .branch_mispredict  (branch_mispredict),//out
+        .correct_pc         (correct_pc)        //out
+    );
+    
+    // 访存级
+    mem_stage u_mem_stage (
+        .clk            (sys_clk),
+        .rst           (sys_rst),
+        .stall          (mem_stall), // Connect stall signal
+        .flush          (flush_mask[3]),
+        .ex_mem_reg     (ex_mem_reg),
+        .mem_wb_next    (mem_wb_next),
+        .wb_master      (wb_data.master)
+    );
+    
+    // 写回级
+    wb_stage u_wb_stage (
+        .clk            (sys_clk),
+        .rst           (sys_rst),
+        .flush          (flush_mask[4]),
+        .mem_wb_reg     (mem_wb_reg)
+    );
+
+    // 危险检测单元
+    hazard_unit u_hazard_unit (
+        .id_ex_mem_read (id_ex_reg.mem_read),
+        .id_ex_reg_write(id_ex_reg.reg_write),
+        .id_ex_rd       (id_ex_reg.rd),
+        .ex_is_branch   (id_ex_reg.is_branch),
+        .ex_mem_mem_read(ex_mem_reg.mem_read), 
+        .ex_mem_rd      (ex_mem_reg.rd),       
+        .if_id_inst     (if_id_reg.inst),
+        .if_id_rs1      (if_id_reg.inst[19:15]),
+        .if_id_rs2      (if_id_reg.inst[24:20]),
+        .branch_mispredict(branch_mispredict),
+        .branch_redirect_id(branch_redirect_id),
+        .inst_mem_wait  (inst_mem_wait),
+        .data_mem_wait  (data_mem_wait),
+        .hazard_stall   (hazard_stall),     //out
+        .mem_stall      (mem_stall),        //out
+        .flush_mask     (flush_mask)        //out
+    );
+    
+    
+    // ==================== 流水线寄存器更新 ====================
+    
+
+
+    always_ff @(posedge sys_clk or posedge sys_rst) begin
+        if (sys_rst) begin
+            if_id_reg <= '0;
+            id_ex_reg <= '0;
+            ex_mem_reg <= '0;
+            mem_wb_reg <= '0;
+            pc <= BASERAM_BASE;  // 从0x80000000开始执行
+        end else begin
+            // Control for PC and IF/ID register
+            if (mem_stall) begin
+                // Memory Stall: Freeze everything
+                if_id_reg <= if_id_reg;
+                pc <= pc;
+            end else if (flush_mask[0]) begin  // 冲刷IF的优先级高过hazard_stall。
+                // Branch redirect or mispredict: Flush IF/ID, update PC to target
+                if_id_reg <= '0;
+                pc <= next_pc; 
+            end else if (hazard_stall) begin
+                // Hazard Stall: Hold IF/ID and PC
+                if_id_reg <= if_id_reg;
+                pc <= pc;
+            end else begin
+                // Normal operation
+                if (if_id_next.valid) begin
+                    if_id_reg <= if_id_next;
+                    pc <= next_pc;
+                end else begin
+                    // if_id_next.valid为低的原因是flush或者读sram等待，此时应插入气泡等待。
+                    if_id_reg <= '0;
+                    pc <= pc;
+                end
+            end
+
+            // Control for ID/EX register
+            if (mem_stall) begin
+                // Memory Stall: Freeze
+                id_ex_reg <= id_ex_reg;
+            end else if (hazard_stall) begin
+                // Hazard Stall: Inject Bubble
+                id_ex_reg <= '0; 
+            end else begin
+                // Normal or Flush
+                id_ex_reg <= flush_mask[1] ? '0 : id_ex_next;
+            end
+
+            // Control for EX/MEM register
+            if (mem_stall) begin
+                // Memory Stall: Freeze
+                ex_mem_reg <= ex_mem_reg;
+            end else begin
+                // Normal or Flush
+                ex_mem_reg <= flush_mask[2] ? '0 : ex_mem_next;
+            end
+
+            // Control for MEM/WB register
+            if (mem_stall) begin
+                // Memory Stall: Freeze
+                mem_wb_reg <= mem_wb_reg;
+            end else begin
+                // Normal or Flush
+                mem_wb_reg <= flush_mask[3] ? '0 : mem_wb_next;
+            end
+        end
+    end
+
+endmodule
