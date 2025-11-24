@@ -29,7 +29,8 @@ module if_stage (
     // BTB结构定义
     typedef struct packed {
         logic        valid;
-        logic [19:0] tag;        // PC高位作为tag
+        // PC高位作为tag，长度为32-2-BTB_INDEX_WIDTH
+        logic [32-2-BTB_INDEX_WIDTH-1:0] tag;        
         logic [31:0] target;     // 预测目标地址
         logic [1:0]  counter;    // 2位饱和计数器
     } btb_entry_t;
@@ -39,20 +40,20 @@ module if_stage (
     
     // BTB访问信号
     logic [BTB_INDEX_WIDTH-1:0]  btb_index;
-    logic [19:0] btb_tag;
+    logic [32-2-BTB_INDEX_WIDTH-1:0] btb_tag;
     logic        btb_hit;
     logic [31:0] btb_target;
     logic        btb_taken;
 
     logic [BTB_INDEX_WIDTH-1:0]  ex_btb_index;
-    logic [19:0] ex_btb_tag;
+    logic [32-2-BTB_INDEX_WIDTH-1:0] ex_btb_tag;
     
     // BTB索引和标签计算
     assign btb_index = pc[BTB_INDEX_WIDTH+1:2];  // 使用PC的[BTB_INDEX_WIDTH+1:2]位作为索引
-    assign btb_tag = pc[31:12];   // 使用PC的高位作为标签
+    assign btb_tag = pc[31:BTB_INDEX_WIDTH+2];   // 使用PC的高位作为标签
 
     assign ex_btb_index = ex_pc[BTB_INDEX_WIDTH+1:2];
-    assign ex_btb_tag = ex_pc[31:12];
+    assign ex_btb_tag = ex_pc[31:BTB_INDEX_WIDTH+2];
     
     // BTB查找
     always_comb begin

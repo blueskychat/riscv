@@ -25,7 +25,7 @@ module testbench;
     logic rxd;
     logic txd;
     // Windows 需要注意路径分隔符的转义，例如 "D:\\foo\\bar.bin"
-    parameter BASE_RAM_INIT_FILE = "test.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
+    parameter BASE_RAM_INIT_FILE = "kernel.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
     parameter EXT_RAM_INIT_FILE = "extram.bin";  // ExtRAM 初始化文件，请修改为实际的绝对路径
 
     // CPU实例
@@ -353,6 +353,8 @@ module testbench;
         // 运行足够长的时间以完成测试和UART输出
         #40000;
         */
+        #2000;
+        uart.pc_send_byte(8'h72);
         #1000000;
        /* 
         // 检查结果
@@ -373,7 +375,7 @@ module testbench;
             $display("Word %2d  ->  address 0x%08x  data 0x%08h",
                      byte_cnt++, (word_addr << 2), word_data);
         end
-        #10000
+        #10000000
 
         $finish;
     end
