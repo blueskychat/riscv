@@ -11,7 +11,14 @@ module uart_controller #(
     input wire rst_i,
 
     // wishbone slave interface
-    wishbone_if.slave wb_if,
+    input  wire [ADDR_WIDTH-1:0] wb_adr_i,
+    input  wire [DATA_WIDTH-1:0] wb_dat_i,
+    output reg  [DATA_WIDTH-1:0] wb_dat_o,
+    input  wire                  wb_we_i,
+    input  wire [DATA_WIDTH/8-1:0] wb_sel_i,
+    input  wire                  wb_stb_i,
+    output reg                   wb_ack_o,
+    input  wire                  wb_cyc_i,
 
     // uart interface
     output reg uart_txd_o,
@@ -59,13 +66,13 @@ module uart_controller #(
   /*-- wishbone fsm --*/
   always_ff @(posedge clk_i) begin
     if (rst_i)
-      wb_if.ack <= 0;
+      wb_ack_o <= 0;
     else
       // every request get ACK-ed immediately
-      if (wb_if.ack) begin
-        wb_if.ack <= 0;
+      if (wb_ack_o) begin
+        wb_ack_o <= 0;
       end else begin
-        wb_if.ack <= wb_if.stb;
+        wb_ack_o <= wb_stb_i;
       end
   end
 
@@ -73,11 +80,11 @@ module uart_controller #(
   always_ff @(posedge clk_i) begin
     if (rst_i) begin
       txd_start <= 0;
-    end else if(wb_if.stb && wb_if.we) begin
-      case (wb_if.adr[7:0])
+    end else if(wb_stb_i && wb_we_i) begin
+      case (wb_adr_i[7:0])
         REG_DATA: begin
-          if(wb_if.sel[0]) begin
-            txd_data  <= wb_if.dat_o[7:0];
+          if(wb_sel_i[0]) begin
+            txd_data  <= wb_dat_i[7:0];
             txd_start <= 1;
           end
         end
@@ -93,22 +100,22 @@ module uart_controller #(
   always_ff @(posedge clk_i) begin
     if(rst_i) begin
       rxd_clear <= 1;  // clear rxd to initialize dataready
-    end else if(wb_if.stb && !wb_if.we) begin
-      case (wb_if.adr[7:0])
+    end else if(wb_stb_i && !wb_we_i) begin
+      case (wb_adr_i[7:0])
         REG_DATA: begin
-          if (wb_if.sel[0]) wb_if.dat_i[7:0] <= rxd_data;
-          if (wb_if.sel[1]) wb_if.dat_i[15:8] <= rxd_data;
-          if (wb_if.sel[2]) wb_if.dat_i[23:16] <= rxd_data;
-          if (wb_if.sel[3]) wb_if.dat_i[31:24] <= rxd_data;
+          if (wb_sel_i[0]) wb_dat_o[7:0] <= rxd_data;
+          if (wb_sel_i[1]) wb_dat_o[15:8] <= rxd_data;
+          if (wb_sel_i[2]) wb_dat_o[23:16] <= rxd_data;
+          if (wb_sel_i[3]) wb_dat_o[31:24] <= rxd_data;
 
           rxd_clear <= 1;
         end
 
         REG_STATUS: begin
-          if (wb_if.sel[0]) wb_if.dat_i[7:0] <= reg_status;
-          if (wb_if.sel[1]) wb_if.dat_i[15:8] <= reg_status;
-          if (wb_if.sel[2]) wb_if.dat_i[23:16] <= reg_status;
-          if (wb_if.sel[3]) wb_if.dat_i[31:24] <= reg_status;
+          if (wb_sel_i[0]) wb_dat_o[7:0] <= reg_status;
+          if (wb_sel_i[1]) wb_dat_o[15:8] <= reg_status;
+          if (wb_sel_i[2]) wb_dat_o[23:16] <= reg_status;
+          if (wb_sel_i[3]) wb_dat_o[31:24] <= reg_status;
         end
 
         default: ;  // do nothing

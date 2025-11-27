@@ -22,8 +22,18 @@ module if_stage (
     // Inputs for early branch resolution from ID stage
     input  wire logic        branch_redirect_id,
     input  wire logic [31:0] branch_target_id,
-
-    wishbone_if.master  wb_master
+    output logic        stall_req,
+    // Wishbone master interface
+    output logic [31:0] wb_adr_o,
+    output logic [31:0] wb_dat_o,
+    input  wire  [31:0] wb_dat_i,
+    output logic        wb_we_o,
+    output logic [3:0]  wb_sel_o,
+    output logic        wb_stb_o,
+    input  wire         wb_ack_i,
+    output logic        wb_cyc_o,
+    input  wire         wb_rty_i,
+    input  wire         wb_err_i
 );
 
     // BTB结构定义
@@ -56,8 +66,9 @@ module if_stage (
     assign ex_btb_tag = ex_pc[31:BTB_INDEX_WIDTH+2];
     
     // BTB查找
+    btb_entry_t entry;
     always_comb begin
-        btb_entry_t entry = btb_table[btb_index];
+        entry = btb_table[btb_index];
         btb_hit = entry.valid && (entry.tag == btb_tag);
         btb_target = entry.target;
         btb_taken = entry.counter[1];  // 计数器高位决定是否预测跳转
@@ -68,6 +79,7 @@ module if_stage (
     end
     
     // BTB更新（在分支结果确定后）
+    btb_entry_t new_entry, old_entry;  
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             for (int i = 0; i < BTB_SIZE; i++) begin
@@ -75,8 +87,7 @@ module if_stage (
             end
         end else if (branch_mispredict) begin
             // 更新BTB表项
-            btb_entry_t new_entry;
-            btb_entry_t old_entry = btb_table[ex_btb_index];
+            old_entry = btb_table[ex_btb_index];
 
             new_entry.valid = 1'b1;
             new_entry.tag = ex_btb_tag;
@@ -122,22 +133,22 @@ module if_stage (
     
     // Wishbone总线访问指令存储器
     always_comb begin
-        wb_master.adr = pc;
-        wb_master.dat_o = 32'h0;
-        wb_master.we = 1'b0;      // 读操作
-        wb_master.sel = 4'b1111;  // 读取完整字
-        wb_master.stb = !rst;
-        wb_master.cyc = !rst;
+        wb_adr_o = pc;
+        wb_dat_o = 32'h0;
+        wb_we_o = 1'b0;      // 读操作
+        wb_sel_o = 4'b1111;  // 读取完整字
+        wb_stb_o = !rst;
+        wb_cyc_o = !rst;
     end
 
     always_comb begin
         if_id_next = '0;
         if (!flush) begin
             if_id_next.pc = pc; 
-            if_id_next.inst = wb_master.dat_i;
+            if_id_next.inst = wb_dat_i;
             if_id_next.predicted_pc = predicted_pc;
             if_id_next.prediction_valid = prediction_valid;
-            if_id_next.valid = wb_master.ack; 
+            if_id_next.valid = wb_ack_i; 
         end
     end
 endmodule

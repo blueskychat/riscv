@@ -22,7 +22,7 @@ module testbench;
     wire  [31:0] ext_ram_data;
     
     // UART接口
-    logic rxd;
+    wire rxd;
     logic txd;
     // Windows 需要注意路径分隔符的转义，例如 "D:\\foo\\bar.bin"
     parameter BASE_RAM_INIT_FILE = "kernel.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
@@ -339,7 +339,6 @@ module testbench;
         #10000
         */
         // 初始化
-        rxd = 1;
         #100;
         reset_btn = 1;
         #100;

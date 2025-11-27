@@ -82,7 +82,7 @@ module riscv_cpu_top (
     output wire       video_de      // 行数据有效信号，用于区分消隐区
 );
 
-`ifdef SIMULATION
+//`ifdef SIMULATION
     logic reset_of_clk10M;
     initial begin
     #10ns;
@@ -92,6 +92,7 @@ module riscv_cpu_top (
     end
     logic clk_10M;
     assign clk_10M=clk_11M0592;
+/*
 `else
 
     // PLL 分频示例
@@ -116,7 +117,7 @@ module riscv_cpu_top (
     end
 
 `endif
-
+*/
     logic sys_clk;
     logic sys_rst;
 
@@ -127,15 +128,41 @@ module riscv_cpu_top (
     assign uart_rdn = 1'b1;
     assign uart_wrn = 1'b1;
 
-    // Wishbone Interfaces
-    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_master_intf();
-    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_slave0_intf(); // For sram_controller_base
-    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_slave1_intf(); // For sram_controller_ext
-    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_slave2_intf(); // For uart_controller
-
-    // Internal Wishbone Interfaces for IF and MEM stages
-    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_inst();
-    wishbone_if #(.ADDR_WIDTH(32), .DATA_WIDTH(32)) wb_data();
+    // Wishbone signals - IF stage to wishbone_master
+    logic [31:0] wb_inst_adr, wb_inst_dat_o, wb_inst_dat_i;
+    logic        wb_inst_we;
+    logic [3:0]  wb_inst_sel;
+    logic        wb_inst_stb, wb_inst_ack, wb_inst_cyc, wb_inst_rty, wb_inst_err;
+    
+    // Wishbone signals - MEM stage to wishbone_master
+    logic [31:0] wb_data_adr, wb_data_dat_o, wb_data_dat_i;
+    logic        wb_data_we;
+    logic [3:0]  wb_data_sel;
+    logic        wb_data_stb, wb_data_ack, wb_data_cyc, wb_data_rty, wb_data_err;
+    
+    // Wishbone signals - wishbone_master to wb_mux
+    logic [31:0] wb_master_adr, wb_master_dat_o, wb_master_dat_i;
+    logic        wb_master_we;
+    logic [3:0]  wb_master_sel;
+    logic        wb_master_stb, wb_master_ack, wb_master_cyc, wb_master_rty, wb_master_err;
+    
+    // Wishbone signals - wb_mux to sram_controller_base
+    logic [31:0] wb_slave0_adr, wb_slave0_dat_o, wb_slave0_dat_i;
+    logic        wb_slave0_we;
+    logic [3:0]  wb_slave0_sel;
+    logic        wb_slave0_stb, wb_slave0_ack, wb_slave0_cyc, wb_slave0_rty, wb_slave0_err;
+    
+    // Wishbone signals - wb_mux to sram_controller_ext
+    logic [31:0] wb_slave1_adr, wb_slave1_dat_o, wb_slave1_dat_i;
+    logic        wb_slave1_we;
+    logic [3:0]  wb_slave1_sel;
+    logic        wb_slave1_stb, wb_slave1_ack, wb_slave1_cyc, wb_slave1_rty, wb_slave1_err;
+    
+    // Wishbone signals - wb_mux to uart_controller
+    logic [31:0] wb_slave2_adr, wb_slave2_dat_o, wb_slave2_dat_i;
+    logic        wb_slave2_we;
+    logic [3:0]  wb_slave2_sel;
+    logic        wb_slave2_stb, wb_slave2_ack, wb_slave2_cyc, wb_slave2_rty, wb_slave2_err;
 
     // wb_inst and wb_data are connected to wishbone_master
     // wb_master_intf is connected to wb_mux
@@ -161,12 +188,41 @@ module riscv_cpu_top (
         .clk_i(sys_clk),
         .rst_i(sys_rst),
 
-        // Inputs from pipeline
-        .wb_inst(wb_inst.slave),
-        .wb_data(wb_data.slave),
+        // wb_inst (from IF stage)
+        .wb_inst_adr_i(wb_inst_adr),
+        .wb_inst_dat_i(wb_inst_dat_o),
+        .wb_inst_dat_o(wb_inst_dat_i),
+        .wb_inst_we_i(wb_inst_we),
+        .wb_inst_sel_i(wb_inst_sel),
+        .wb_inst_stb_i(wb_inst_stb),
+        .wb_inst_ack_o(wb_inst_ack),
+        .wb_inst_cyc_i(wb_inst_cyc),
+        .wb_inst_rty_o(wb_inst_rty),
+        .wb_inst_err_o(wb_inst_err),
 
-        // Output to bus
-        .wb_out(wb_master_intf.master)
+        // wb_data (from MEM stage)
+        .wb_data_adr_i(wb_data_adr),
+        .wb_data_dat_i(wb_data_dat_o),
+        .wb_data_dat_o(wb_data_dat_i),
+        .wb_data_we_i(wb_data_we),
+        .wb_data_sel_i(wb_data_sel),
+        .wb_data_stb_i(wb_data_stb),
+        .wb_data_ack_o(wb_data_ack),
+        .wb_data_cyc_i(wb_data_cyc),
+        .wb_data_rty_o(wb_data_rty),
+        .wb_data_err_o(wb_data_err),
+
+        // wb_out (to MUX)
+        .wb_out_adr_o(wb_master_adr),
+        .wb_out_dat_o(wb_master_dat_o),
+        .wb_out_dat_i(wb_master_dat_i),
+        .wb_out_we_o(wb_master_we),
+        .wb_out_sel_o(wb_master_sel),
+        .wb_out_stb_o(wb_master_stb),
+        .wb_out_ack_i(wb_master_ack),
+        .wb_out_cyc_o(wb_master_cyc),
+        .wb_out_rty_i(wb_master_rty),
+        .wb_out_err_i(wb_master_err)
     );
 
     /* =========== Wishbone Master end =========== */
@@ -178,26 +234,62 @@ module riscv_cpu_top (
         .clk(sys_clk),
         .rst(sys_rst),
 
-        // Master interface (to wishbone master)
-        .wb_master_if(wb_master_intf.slave), // MUX acts as a slave to the master
+        // Master interface (from wishbone_master)
+        .wb_master_adr_i(wb_master_adr),
+        .wb_master_dat_i(wb_master_dat_o),
+        .wb_master_dat_o(wb_master_dat_i),
+        .wb_master_we_i(wb_master_we),
+        .wb_master_sel_i(wb_master_sel),
+        .wb_master_stb_i(wb_master_stb),
+        .wb_master_ack_o(wb_master_ack),
+        .wb_master_cyc_i(wb_master_cyc),
+        .wb_master_rty_o(wb_master_rty),
+        .wb_master_err_o(wb_master_err),
 
-        // Slave interface 0 (to BaseRAM controller)
+        // Slave 0 interface (to BaseRAM controller)
+        .wb_slave0_adr_o(wb_slave0_adr),
+        .wb_slave0_dat_o(wb_slave0_dat_o),
+        .wb_slave0_dat_i(wb_slave0_dat_i),
+        .wb_slave0_we_o(wb_slave0_we),
+        .wb_slave0_sel_o(wb_slave0_sel),
+        .wb_slave0_stb_o(wb_slave0_stb),
+        .wb_slave0_ack_i(wb_slave0_ack),
+        .wb_slave0_cyc_o(wb_slave0_cyc),
+        .wb_slave0_rty_i(wb_slave0_rty),
+        .wb_slave0_err_i(wb_slave0_err),
         // Address range: 0x8000_0000 ~ 0x803F_FFFF
         .wbs0_addr    (32'h8000_0000),
         .wbs0_addr_msk(32'hFFC0_0000),
-        .wb_slave0_if(wb_slave0_intf.master), // MUX acts as a master to the slave
 
-        // Slave interface 1 (to ExtRAM controller)
+        // Slave 1 interface (to ExtRAM controller)
+        .wb_slave1_adr_o(wb_slave1_adr),
+        .wb_slave1_dat_o(wb_slave1_dat_o),
+        .wb_slave1_dat_i(wb_slave1_dat_i),
+        .wb_slave1_we_o(wb_slave1_we),
+        .wb_slave1_sel_o(wb_slave1_sel),
+        .wb_slave1_stb_o(wb_slave1_stb),
+        .wb_slave1_ack_i(wb_slave1_ack),
+        .wb_slave1_cyc_o(wb_slave1_cyc),
+        .wb_slave1_rty_i(wb_slave1_rty),
+        .wb_slave1_err_i(wb_slave1_err),
         // Address range: 0x8040_0000 ~ 0x807F_FFFF
         .wbs1_addr    (32'h8040_0000),
         .wbs1_addr_msk(32'hFFC0_0000),
-        .wb_slave1_if(wb_slave1_intf.master), // MUX acts as a master to the slave
 
-        // Slave interface 2 (to UART controller)
+        // Slave 2 interface (to UART controller)
+        .wb_slave2_adr_o(wb_slave2_adr),
+        .wb_slave2_dat_o(wb_slave2_dat_o),
+        .wb_slave2_dat_i(wb_slave2_dat_i),
+        .wb_slave2_we_o(wb_slave2_we),
+        .wb_slave2_sel_o(wb_slave2_sel),
+        .wb_slave2_stb_o(wb_slave2_stb),
+        .wb_slave2_ack_i(wb_slave2_ack),
+        .wb_slave2_cyc_o(wb_slave2_cyc),
+        .wb_slave2_rty_i(wb_slave2_rty),
+        .wb_slave2_err_i(wb_slave2_err),
         // Address range: 0x1000_0000 ~ 0x1000_FFFF
         .wbs2_addr    (32'h1000_0000),
-        .wbs2_addr_msk(32'hFFFF_0000),
-        .wb_slave2_if(wb_slave2_intf.master)  // MUX acts as a master to the slave
+        .wbs2_addr_msk(32'hFFFF_0000)
     );
 
     /* =========== Wishbone MUX end =========== */
@@ -210,8 +302,15 @@ module riscv_cpu_top (
         .clk_i(sys_clk),
         .rst_i(sys_rst),
 
-        // Wishbone slave (to MUX)
-        .wb_if(wb_slave0_intf.slave),
+        // Wishbone slave (from MUX)
+        .wb_adr_i(wb_slave0_adr),
+        .wb_dat_i(wb_slave0_dat_o),
+        .wb_dat_o(wb_slave0_dat_i),
+        .wb_we_i(wb_slave0_we),
+        .wb_sel_i(wb_slave0_sel),
+        .wb_stb_i(wb_slave0_stb),
+        .wb_ack_o(wb_slave0_ack),
+        .wb_cyc_i(wb_slave0_cyc),
 
         // To SRAM chip
         .sram_addr(base_ram_addr),
@@ -229,8 +328,15 @@ module riscv_cpu_top (
         .clk_i(sys_clk),
         .rst_i(sys_rst),
 
-        // Wishbone slave (to MUX)
-        .wb_if(wb_slave1_intf.slave),
+        // Wishbone slave (from MUX)
+        .wb_adr_i(wb_slave1_adr),
+        .wb_dat_i(wb_slave1_dat_o),
+        .wb_dat_o(wb_slave1_dat_i),
+        .wb_we_i(wb_slave1_we),
+        .wb_sel_i(wb_slave1_sel),
+        .wb_stb_i(wb_slave1_stb),
+        .wb_ack_o(wb_slave1_ack),
+        .wb_cyc_i(wb_slave1_cyc),
 
         // To SRAM chip
         .sram_addr(ext_ram_addr),
@@ -250,7 +356,15 @@ module riscv_cpu_top (
         .clk_i(sys_clk),
         .rst_i(sys_rst),
 
-        .wb_if(wb_slave2_intf.slave),
+        // Wishbone slave (from MUX)
+        .wb_adr_i(wb_slave2_adr),
+        .wb_dat_i(wb_slave2_dat_o),
+        .wb_dat_o(wb_slave2_dat_i),
+        .wb_we_i(wb_slave2_we),
+        .wb_sel_i(wb_slave2_sel),
+        .wb_stb_i(wb_slave2_stb),
+        .wb_ack_o(wb_slave2_ack),
+        .wb_cyc_i(wb_slave2_cyc),
 
         // to UART pins
         .uart_txd_o(txd),
@@ -281,8 +395,8 @@ module riscv_cpu_top (
     logic inst_mem_wait;
     logic data_mem_wait;
 
-    assign inst_mem_wait = wb_inst.cyc && wb_inst.stb && !wb_inst.ack;
-    assign data_mem_wait = wb_data.cyc && wb_data.stb && !wb_data.ack;
+    assign inst_mem_wait = wb_inst_cyc && wb_inst_stb && !wb_inst_ack;
+    assign data_mem_wait = wb_data_cyc && wb_data_stb && !wb_data_ack;
     
     // ==================== 流水线寄存器 ====================
     
@@ -310,7 +424,18 @@ module riscv_cpu_top (
         .ex_is_branch   (id_ex_reg.is_branch),  //in
         .branch_redirect_id(branch_redirect_id),      //in
         .branch_target_id(branch_target_id),    //in
-        .wb_master      (wb_inst.master)
+        
+        // Wishbone master interface
+        .wb_adr_o       (wb_inst_adr),
+        .wb_dat_o       (wb_inst_dat_o),
+        .wb_dat_i       (wb_inst_dat_i),
+        .wb_we_o        (wb_inst_we),
+        .wb_sel_o       (wb_inst_sel),
+        .wb_stb_o       (wb_inst_stb),
+        .wb_ack_i       (wb_inst_ack),
+        .wb_cyc_o       (wb_inst_cyc),
+        .wb_rty_i       (wb_inst_rty),
+        .wb_err_i       (wb_inst_err)
     );
     
     // 译码级
@@ -360,7 +485,17 @@ module riscv_cpu_top (
         .flush          (flush_mask[3]),
         .ex_mem_reg     (ex_mem_reg),
         .mem_wb_next    (mem_wb_next),
-        .wb_master      (wb_data.master)
+        // Wishbone master interface
+        .wb_adr_o       (wb_data_adr),
+        .wb_dat_o       (wb_data_dat_o),
+        .wb_dat_i       (wb_data_dat_i),
+        .wb_we_o        (wb_data_we),
+        .wb_sel_o       (wb_data_sel),
+        .wb_stb_o       (wb_data_stb),
+        .wb_ack_i       (wb_data_ack),
+        .wb_cyc_o       (wb_data_cyc),
+        .wb_rty_i       (wb_data_rty),
+        .wb_err_i       (wb_data_err)
     );
     
     // 写回级

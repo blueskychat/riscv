@@ -14,7 +14,14 @@ module sram_controller #(
     input wire rst_i,
 
     // wishbone slave interface
-    wishbone_if.slave wb_if,
+    input  wire [ADDR_WIDTH-1:0] wb_adr_i,
+    input  wire [DATA_WIDTH-1:0] wb_dat_i,
+    output reg  [DATA_WIDTH-1:0] wb_dat_o,
+    input  wire                  wb_we_i,
+    input  wire [DATA_WIDTH/8-1:0] wb_sel_i,
+    input  wire                  wb_stb_i,
+    output reg                   wb_ack_o,
+    input  wire                  wb_cyc_i,
 
     // sram interface
     output reg [SRAM_ADDR_WIDTH-1:0] sram_addr,
@@ -57,8 +64,8 @@ module sram_controller #(
         sram_we_n_reg = 1'b1;
     end
 */
-    assign wb_if.ack = wb_ack_o_reg;
-    assign wb_if.dat_i = wb_dat_o_reg;
+    assign wb_ack_o = wb_ack_o_reg;
+    assign wb_dat_o = wb_dat_o_reg;
 
     assign sram_addr = sram_addr_reg;
 
@@ -95,24 +102,24 @@ module sram_controller #(
             sram_data_o_reg   <= sram_data_o_reg;          
             case (state)
               STATE_IDLE: begin
-                if (wb_if.stb && wb_if.cyc ) begin
+                if (wb_stb_i && wb_cyc_i ) begin
                     //sram_addr_reg <= wb_adr_i/SRAM_BYTES; wb_adr_i>>SRAM_BYTES;
-                    sram_addr_reg <= wb_if.adr[SRAM_ADDR_WIDTH + SRAM_BYTE_WIDTH - 1 : SRAM_BYTE_WIDTH];
-                    if (wb_if.we) begin
+                    sram_addr_reg <= wb_adr_i[SRAM_ADDR_WIDTH + SRAM_BYTE_WIDTH - 1 : SRAM_BYTE_WIDTH];
+                    if (wb_we_i) begin
                         sram_data_t_reg <= 1'b0;
-                        sram_data_o_reg <= wb_if.dat_o;
-                        sram_be_n_reg <= ~wb_if.sel;
+                        sram_data_o_reg <= wb_dat_i;
+                        sram_be_n_reg <= ~wb_sel_i;
                         sram_ce_n_reg <= 1'b0;
                         sram_oe_n_reg <= 1'b1;
                         sram_we_n_reg <= 1'b1;
                         state <= STATE_WRITE;
                     end else begin
                         sram_data_t_reg <= 1'b1;
-                        sram_be_n_reg <= ~wb_if.sel;
+                        sram_be_n_reg <= ~wb_sel_i;
                         sram_ce_n_reg <= 1'b0;
                         sram_oe_n_reg <= 1'b0;
                         sram_we_n_reg <= 1'b1;
-                        state <= STATE_READ;
+                        state <= STATE_READ;//_2; // Optimized: Skip STATE_READ
                     end
                 end
               end
