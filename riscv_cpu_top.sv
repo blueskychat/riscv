@@ -280,8 +280,9 @@ module riscv_cpu_top (
     // Memory wait signals
     logic inst_mem_wait;
     logic data_mem_wait;
+    logic if_stall_req; // Request from IF stage (I-Cache miss)
 
-    assign inst_mem_wait = wb_inst.cyc && wb_inst.stb && !wb_inst.ack;
+    assign inst_mem_wait = (wb_inst.cyc && wb_inst.stb && !wb_inst.ack) || if_stall_req;
     assign data_mem_wait = wb_data.cyc && wb_data.stb && !wb_data.ack;
     
     // ==================== 流水线寄存器 ====================
@@ -310,6 +311,7 @@ module riscv_cpu_top (
         .ex_is_branch   (id_ex_reg.is_branch),  //in
         .branch_redirect_id(branch_redirect_id),      //in
         .branch_target_id(branch_target_id),    //in
+        .stall_req      (if_stall_req),         //out: I-Cache miss stall request
         .wb_master      (wb_inst.master)
     );
     

@@ -22,7 +22,7 @@ module if_stage (
     // Inputs for early branch resolution from ID stage
     input  wire logic        branch_redirect_id,
     input  wire logic [31:0] branch_target_id,
-
+    output logic        stall_req,
     wishbone_if.master  wb_master
 );
 
@@ -120,24 +120,79 @@ module if_stage (
         end
     end
     
-    // Wishbone总线访问指令存储器
-    always_comb begin
-        wb_master.adr = pc;
-        wb_master.dat_o = 32'h0;
-        wb_master.we = 1'b0;      // 读操作
-        wb_master.sel = 4'b1111;  // 读取完整字
-        wb_master.stb = !rst;
-        wb_master.cyc = !rst;
-    end
+
+    // Instruction Cache Signals
+    logic [31:0] icache_data;
+    logic        icache_hit;
+    logic        icache_stall;
+    
+    assign stall_req = icache_stall;
+    
+    // Wishbone signals from Cache
+    logic        wb_cyc_o;
+    logic        wb_stb_o;
+    logic        wb_we_o;
+    logic [31:0] wb_adr_o;
+    logic [31:0] wb_dat_o; // 对于icache来说，写数据没有意义, 但是需要连接
+    logic [3:0]  wb_sel_o;
+
+    // Instantiate Instruction Cache
+    instruction_cache #(
+        .ADDR_WIDTH(32),
+        .DATA_WIDTH(32),
+        .CACHE_SIZE(4096),
+        .LINE_SIZE(16)
+    ) u_icache (
+        .clk(clk),
+        .rst(rst),
+
+        // CPU Interface
+        // Use next_pc for 1-cycle fetch!
+        // Logic:
+        // 1. If Stalled (Reset, Cache Miss, Hazard, etc.): Request 'pc' (Current Address).
+        //    This ensures that when stall lifts, we have the instruction for 'pc'.
+        //    Also handles the Reset case (stall is high due to miss).
+        // 2. If Running: Request 'next_pc' (Next Address).
+        //    This achieves 1-cycle throughput (prefetching next instruction).
+        .cpu_req_addr(stall ? pc : next_pc), 
+        .cpu_data(icache_data),
+        .cpu_hit(icache_hit),
+        .cache_stall(icache_stall),
+
+        // Wishbone Master Interface
+        .wb_cyc(wb_cyc_o),
+        .wb_stb(wb_stb_o),
+        .wb_we(wb_we_o),
+        .wb_adr(wb_adr_o),
+        .wb_dat_o(wb_dat_o),
+        .wb_sel_o(wb_sel_o),
+        .wb_dat_i(wb_master.dat_i),
+        .wb_ack(wb_master.ack)
+    );
+
+    // Connect Cache Wishbone signals to Interface
+    assign wb_master.cyc = wb_cyc_o;
+    assign wb_master.stb = wb_stb_o;
+    assign wb_master.we  = wb_we_o;
+    assign wb_master.adr = wb_adr_o;
+    assign wb_master.dat_o = wb_dat_o;
+    assign wb_master.sel = wb_sel_o;
 
     always_comb begin
         if_id_next = '0;
         if (!flush) begin
             if_id_next.pc = pc; 
-            if_id_next.inst = wb_master.dat_i;
+            // If hit, data is valid. If miss, we stall
+            // If cache_stall is high, we must NOT update PC.
+            // riscv_cpu_top controls PC update.
+            // We need to export 'icache_stall' to the pipeline control!
+            
+            if_id_next.inst = icache_data;
             if_id_next.predicted_pc = predicted_pc;
             if_id_next.prediction_valid = prediction_valid;
-            if_id_next.valid = wb_master.ack; 
+            
+            // If Hit, valid=1. If Miss, valid=0 (until refill done).
+            if_id_next.valid = icache_hit; 
         end
     end
 endmodule

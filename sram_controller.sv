@@ -112,7 +112,7 @@ module sram_controller #(
                         sram_ce_n_reg <= 1'b0;
                         sram_oe_n_reg <= 1'b0;
                         sram_we_n_reg <= 1'b1;
-                        state <= STATE_READ;
+                        state <= STATE_READ;//_2; // Optimized: Skip STATE_READ
                     end
                 end
               end
