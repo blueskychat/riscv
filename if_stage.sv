@@ -23,7 +23,17 @@ module if_stage (
     input  wire logic        branch_redirect_id,
     input  wire logic [31:0] branch_target_id,
     output logic        stall_req,
-    wishbone_if.master  wb_master
+    // Wishbone master interface
+    output logic [31:0] wb_adr_o,
+    output logic [31:0] wb_dat_o,
+    input  wire  [31:0] wb_dat_i,
+    output logic        wb_we_o,
+    output logic [3:0]  wb_sel_o,
+    output logic        wb_stb_o,
+    input  wire         wb_ack_i,
+    output logic        wb_cyc_o,
+    input  wire         wb_rty_i,
+    input  wire         wb_err_i
 );
 
     // BTB结构定义
@@ -56,8 +66,9 @@ module if_stage (
     assign ex_btb_tag = ex_pc[31:BTB_INDEX_WIDTH+2];
     
     // BTB查找
+    btb_entry_t entry;  // Moved outside for iverilog compatibility
     always_comb begin
-        btb_entry_t entry = btb_table[btb_index];
+        entry = btb_table[btb_index];
         btb_hit = entry.valid && (entry.tag == btb_tag);
         btb_target = entry.target;
         btb_taken = entry.counter[1];  // 计数器高位决定是否预测跳转
@@ -68,6 +79,7 @@ module if_stage (
     end
     
     // BTB更新（在分支结果确定后）
+    btb_entry_t new_entry, old_entry;  // Moved outside for iverilog compatibility
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             for (int i = 0; i < BTB_SIZE; i++) begin
@@ -75,8 +87,7 @@ module if_stage (
             end
         end else if (branch_mispredict) begin
             // 更新BTB表项
-            btb_entry_t new_entry;
-            btb_entry_t old_entry = btb_table[ex_btb_index];
+            old_entry = btb_table[ex_btb_index];
 
             new_entry.valid = 1'b1;
             new_entry.tag = ex_btb_tag;
@@ -128,13 +139,7 @@ module if_stage (
     
     assign stall_req = icache_stall;
     
-    // Wishbone signals from Cache
-    logic        wb_cyc_o;
-    logic        wb_stb_o;
-    logic        wb_we_o;
-    logic [31:0] wb_adr_o;
-    logic [31:0] wb_dat_o; // 对于icache来说，写数据没有意义, 但是需要连接
-    logic [3:0]  wb_sel_o;
+    // Wishbone signals are already declared as module ports
 
     // Instantiate Instruction Cache
     instruction_cache #(
@@ -166,17 +171,10 @@ module if_stage (
         .wb_adr(wb_adr_o),
         .wb_dat_o(wb_dat_o),
         .wb_sel_o(wb_sel_o),
-        .wb_dat_i(wb_master.dat_i),
-        .wb_ack(wb_master.ack)
+        .wb_dat_i(wb_dat_i),
+        .wb_ack(wb_ack_i)
     );
 
-    // Connect Cache Wishbone signals to Interface
-    assign wb_master.cyc = wb_cyc_o;
-    assign wb_master.stb = wb_stb_o;
-    assign wb_master.we  = wb_we_o;
-    assign wb_master.adr = wb_adr_o;
-    assign wb_master.dat_o = wb_dat_o;
-    assign wb_master.sel = wb_sel_o;
 
     always_comb begin
         if_id_next = '0;

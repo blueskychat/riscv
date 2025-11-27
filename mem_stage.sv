@@ -11,7 +11,17 @@ module mem_stage (
     input  ex_mem_reg_t ex_mem_reg,
     output mem_wb_reg_t mem_wb_next,
     
-    wishbone_if.master  wb_master
+    // Wishbone master interface
+    output logic [31:0] wb_adr_o,
+    output logic [31:0] wb_dat_o,
+    input  wire  [31:0] wb_dat_i,
+    output logic        wb_we_o,
+    output logic [3:0]  wb_sel_o,
+    output logic        wb_stb_o,
+    input  wire         wb_ack_i,
+    output logic        wb_cyc_o,
+    input  wire         wb_rty_i,
+    input  wire         wb_err_i
 );
 
     // 内存访问状态机
@@ -36,8 +46,8 @@ module mem_stage (
     
     // Latch data on ACK
     always_ff @(posedge clk) begin
-        if (state == MEM_WAIT_ACK && (wb_master.ack || wb_master.err)) begin
-            read_data_reg <= wb_master.dat_i;
+        if (state == MEM_WAIT_ACK && (wb_ack_i || wb_err_i)) begin
+            read_data_reg <= wb_dat_i;
         end
     end
 
@@ -51,7 +61,7 @@ module mem_stage (
             end
             
             MEM_WAIT_ACK: begin
-                if (wb_master.ack || wb_master.err) begin
+                if (wb_ack_i || wb_err_i) begin
                     if (stall) 
                         next_state = MEM_DONE; // If stalled, wait in DONE
                     else 
@@ -72,35 +82,35 @@ module mem_stage (
     assign mem_op_pending = (ex_mem_reg.mem_read || ex_mem_reg.mem_write) && ex_mem_reg.valid;
 
     always_comb begin
-        wb_master.adr = ex_mem_reg.alu_result;
-        wb_master.dat_o = ex_mem_reg.rs2_data;
-        wb_master.we = ex_mem_reg.mem_write;
+        wb_adr_o = ex_mem_reg.alu_result;
+        wb_dat_o = ex_mem_reg.rs2_data;
+        wb_we_o = ex_mem_reg.mem_write;
         
         // 字节选择信号
         case (ex_mem_reg.mem_width)
             MEM_BYTE: begin
                 case (ex_mem_reg.alu_result[1:0])
-                    2'b00: wb_master.sel = 4'b0001;
-                    2'b01: wb_master.sel = 4'b0010;
-                    2'b10: wb_master.sel = 4'b0100;
-                    2'b11: wb_master.sel = 4'b1000;
+                    2'b00: wb_sel_o = 4'b0001;
+                    2'b01: wb_sel_o = 4'b0010;
+                    2'b10: wb_sel_o = 4'b0100;
+                    2'b11: wb_sel_o = 4'b1000;
                 endcase
             end
             MEM_HALF: begin
-                wb_master.sel = ex_mem_reg.alu_result[1] ? 4'b1100 : 4'b0011;
+                wb_sel_o = ex_mem_reg.alu_result[1] ? 4'b1100 : 4'b0011;
             end
             MEM_WORD: begin
-                wb_master.sel = 4'b1111;
+                wb_sel_o = 4'b1111;
             end
-            default: wb_master.sel = 4'b1111;
+            default: wb_sel_o = 4'b1111;
         endcase
         // Only assert cyc/stb in IDLE (starting) or WAIT_ACK. NOT in DONE.
-        wb_master.stb = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
-        wb_master.cyc = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending); 
+        wb_stb_o = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
+        wb_cyc_o = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending); 
     end
     
     // 数据对齐和符号扩展
-    assign mem_data_raw = (state == MEM_DONE) ? read_data_reg : wb_master.dat_i;
+    assign mem_data_raw = (state == MEM_DONE) ? read_data_reg : wb_dat_i;
     
     always_comb begin
         case (ex_mem_reg.mem_width)
@@ -173,7 +183,7 @@ module mem_stage (
             
             if (ex_mem_reg.mem_read || ex_mem_reg.mem_write) begin
                 // Memory op: valid only when done
-                mem_wb_next.valid = (state == MEM_DONE) || (state == MEM_WAIT_ACK && (wb_master.ack || wb_master.err));
+                mem_wb_next.valid = (state == MEM_DONE) || (state == MEM_WAIT_ACK && (wb_ack_i || wb_err_i));
             end else begin
                 // ALU op: always valid
                 mem_wb_next.valid = 1'b1;
