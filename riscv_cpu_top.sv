@@ -82,7 +82,7 @@ module riscv_cpu_top (
     output wire       video_de      // 行数据有效信号，用于区分消隐区
 );
 
-//`ifdef SIMULATION
+`ifdef SIMU
     logic reset_of_clk10M;
     initial begin
     #10ns;
@@ -92,7 +92,6 @@ module riscv_cpu_top (
     end
     logic clk_10M;
     assign clk_10M=clk_11M0592;
-/*
 `else
 
     // PLL 分频示例
@@ -117,7 +116,7 @@ module riscv_cpu_top (
     end
 
 `endif
-*/
+
     logic sys_clk;
     logic sys_rst;
 
@@ -394,8 +393,9 @@ module riscv_cpu_top (
     // Memory wait signals
     logic inst_mem_wait;
     logic data_mem_wait;
+    logic if_stall_req; // Stall request from IF stage (ICACHE)
 
-    assign inst_mem_wait = wb_inst_cyc && wb_inst_stb && !wb_inst_ack;
+    assign inst_mem_wait = if_stall_req;
     assign data_mem_wait = wb_data_cyc && wb_data_stb && !wb_data_ack;
     
     // ==================== 流水线寄存器 ====================
@@ -424,6 +424,7 @@ module riscv_cpu_top (
         .ex_is_branch   (id_ex_reg.is_branch),  //in
         .branch_redirect_id(branch_redirect_id),      //in
         .branch_target_id(branch_target_id),    //in
+        .stall_req      (if_stall_req),         //out
         
         // Wishbone master interface
         .wb_adr_o       (wb_inst_adr),

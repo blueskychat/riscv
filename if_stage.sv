@@ -23,7 +23,7 @@ module if_stage (
     input  wire logic        branch_redirect_id,
     input  wire logic [31:0] branch_target_id,
     output logic        stall_req,
-    // Wishbone master interface
+    // Wishbone master interface (Connected to ICACHE now)
     output logic [31:0] wb_adr_o,
     output logic [31:0] wb_dat_o,
     input  wire  [31:0] wb_dat_i,
@@ -132,23 +132,44 @@ module if_stage (
     end
     
     // Wishbone总线访问指令存储器
-    always_comb begin
-        wb_adr_o = pc;
-        wb_dat_o = 32'h0;
-        wb_we_o = 1'b0;      // 读操作
-        wb_sel_o = 4'b1111;  // 读取完整字
-        wb_stb_o = !rst;
-        wb_cyc_o = !rst;
-    end
+    // ICACHE Instantiation
+    logic [31:0] icache_inst;
+    logic        icache_ready;
+    
+    icache u_icache (
+        .clk           (clk),
+        .rst           (rst),
+        
+        // CPU Interface
+        .cpu_req_addr  (pc),
+        .cpu_req_valid (!rst), // Always request if not in reset
+        .cpu_inst      (icache_inst),
+        .cpu_ready     (icache_ready),
+        
+        // Wishbone Master Interface
+        .wb_adr_o      (wb_adr_o),
+        .wb_dat_o      (wb_dat_o),
+        .wb_dat_i      (wb_dat_i),
+        .wb_we_o       (wb_we_o),
+        .wb_sel_o      (wb_sel_o),
+        .wb_stb_o      (wb_stb_o),
+        .wb_ack_i      (wb_ack_i),
+        .wb_cyc_o      (wb_cyc_o),
+        .wb_rty_i      (wb_rty_i),
+        .wb_err_i      (wb_err_i)
+    );
+    
+    // Stall request if cache is not ready
+    assign stall_req = !icache_ready;
 
     always_comb begin
         if_id_next = '0;
         if (!flush) begin
             if_id_next.pc = pc; 
-            if_id_next.inst = wb_dat_i;
+            if_id_next.inst = icache_inst;
             if_id_next.predicted_pc = predicted_pc;
             if_id_next.prediction_valid = prediction_valid;
-            if_id_next.valid = wb_ack_i; 
+            if_id_next.valid = icache_ready; 
         end
     end
 endmodule
