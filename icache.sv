@@ -34,6 +34,11 @@ module icache (
     localparam OFFSET_WIDTH = 4;    // log2(16)
     localparam TAG_WIDTH = 19;      // 32 - 9 - 4
     localparam WORD_OFFSET_WIDTH = 2; // log2(4)
+
+    // L0 Cache Parameters (1KB = 64 sets * 16 bytes)
+    localparam L0_SETS = 64;
+    localparam L0_INDEX_WIDTH = 6; // log2(64)
+    localparam L0_TAG_WIDTH = 32 - 4 - L0_INDEX_WIDTH; // 32 - 4 - 6 = 22
     
     // Address breakdown (combinational from current PC)
     logic [TAG_WIDTH-1:0]        tag;
@@ -91,19 +96,29 @@ module icache (
     logic valid_read [WAYS-1:0];
     logic [1:0] lru_read [WAYS-1:0];
     
-    // Line Buffer (Micro-cache)
-    logic [127:0] line_buffer_data;
-    logic [TAG_WIDTH+INDEX_WIDTH-1:0] line_buffer_addr_tag; // Stores Tag + Index (pc[31:4])
-    logic line_buffer_valid;
-    logic buffer_hit;
+    // L0 Cache (Distributed RAM)
+    (* ram_style = "distributed" *) logic [127:0] l0_data [L0_SETS-1:0];
+    (* ram_style = "distributed" *) logic [L0_TAG_WIDTH-1:0] l0_tag [L0_SETS-1:0];
+    logic l0_valid [L0_SETS-1:0];
 
-    // Buffer hit detection (Combinational)
-    assign buffer_hit = line_buffer_valid && (pc_i[31:4] == line_buffer_addr_tag);
+    logic [L0_INDEX_WIDTH-1:0] l0_index;
+    logic [L0_TAG_WIDTH-1:0] l0_tag_req;
+    logic l0_hit;
+    logic [127:0] l0_hit_data;
+
+    assign l0_index = pc_i[9:4];
+    assign l0_tag_req = pc_i[31:10];
+
+    // L0 Hit Detection (Combinational)
+    always_comb begin
+        l0_hit = l0_valid[l0_index] && (l0_tag[l0_index] == l0_tag_req);
+        l0_hit_data = l0_data[l0_index];
+    end
 
     // Logic to detect start of a new fetch
     logic start_new_fetch;
-    // Only start a new fetch from IDLE if we don't have a buffer hit.
-    assign start_new_fetch = fetch_en_i && (state == IDLE) && !buffer_hit;
+    // Only start a new fetch from IDLE if we don't have a L0 hit.
+    assign start_new_fetch = fetch_en_i && (state == IDLE) && !l0_hit;
 
 
     
@@ -167,13 +182,13 @@ module icache (
     // Extract word from cache line
     logic [31:0] selected_word;
     always_comb begin
-        if (state == IDLE && buffer_hit) begin
-            // Fast path: Read from Line Buffer
+        if (state == IDLE && l0_hit) begin
+            // Fast path: Read from L0 Cache
             case (word_offset) // Use current PC offset
-                2'b00: selected_word = line_buffer_data[31:0];
-                2'b01: selected_word = line_buffer_data[63:32];
-                2'b10: selected_word = line_buffer_data[95:64];
-                2'b11: selected_word = line_buffer_data[127:96];
+                2'b00: selected_word = l0_hit_data[31:0];
+                2'b01: selected_word = l0_hit_data[63:32];
+                2'b10: selected_word = l0_hit_data[95:64];
+                2'b11: selected_word = l0_hit_data[127:96];
             endcase
         end else begin
             // Slow path: Read from BRAM output
@@ -215,7 +230,7 @@ module icache (
         next_state = state;
         case (state)
             IDLE: begin
-                if (fetch_en_i && !buffer_hit) next_state = COMPARE;
+                if (fetch_en_i && !l0_hit) next_state = COMPARE;
             end
             
             COMPARE: begin
@@ -309,19 +324,22 @@ module icache (
     always_comb begin
         inst_o = selected_word;
         // Ready when:
-        // 1. Buffer Hit in IDLE (0 cycle latency)
+        // 1. L0 Hit in IDLE (0 cycle latency)
         // 2. Cache Hit in COMPARE (1 cycle latency)
-        ready_o = (state == IDLE && buffer_hit) || (state == COMPARE && cache_hit);
+        ready_o = (state == IDLE && l0_hit) || (state == COMPARE && cache_hit);
     end
     
     // Initialize cache on reset
     // Unified Metadata Update (Reset + Refill + LRU Update)
+    // Initialize cache on reset
+    // Unified Metadata Update (Reset + Refill + LRU Update)
     integer w, s;
+    integer i;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            line_buffer_valid <= 1'b0;
-            line_buffer_data <= '0;
-            line_buffer_addr_tag <= '0;
+            for (i = 0; i < L0_SETS; i = i + 1) begin
+                l0_valid[i] <= 1'b0;
+            end
             for (w = 0; w < WAYS; w = w + 1) begin
                 for (s = 0; s < SETS; s = s + 1) begin
                     valid_array[w][s] <= 1'b0;
@@ -337,10 +355,10 @@ module icache (
                         lru_array[w][index] <= 2'b11;
                     end
                 end
-                // Update Line Buffer on Refill
-                line_buffer_data <= {wb_dat_i, refill_data[95:0]};
-                line_buffer_addr_tag <= {tag, index};
-                line_buffer_valid <= 1'b1;
+                // Update L0 on Refill
+                l0_data[l0_index] <= {wb_dat_i, refill_data[95:0]};
+                l0_tag[l0_index] <= l0_tag_req;
+                l0_valid[l0_index] <= 1'b1;
             end 
             // LRU Update on Hit
             else if (state == COMPARE && cache_hit) begin
@@ -351,10 +369,10 @@ module icache (
                         if (lru_read[w] != 2'b00) lru_array[w][index] <= lru_read[w] - 2'b01;
                     end
                 end
-                // Update Line Buffer on Cache Hit
-                line_buffer_data <= hit_data;
-                line_buffer_addr_tag <= {tag, index};
-                line_buffer_valid <= 1'b1;
+                // Update L0 on L1 Cache Hit
+                l0_data[l0_index] <= hit_data;
+                l0_tag[l0_index] <= l0_tag_req;
+                l0_valid[l0_index] <= 1'b1;
             end
         end
     end
