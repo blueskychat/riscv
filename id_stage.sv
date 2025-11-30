@@ -74,18 +74,21 @@ module id_stage (
     end
     
     // 寄存器堆读取
-    // assign id_ex_next.rs1 = rs1; // Removed to fix multi-driven net error
-    // assign id_ex_next.rs2 = rs2; // Removed to fix multi-driven net error
-    
     always_comb begin
         // 处理x0寄存器始终为0
+        // RS1 Read with Forwarding from WB stage (Internal Bypass)
         if (rs1 == 5'h0)
             rs1_data = 32'h0;
+        else if (wb_enable && wb_rd == rs1)
+            rs1_data = reg_write_data;
         else
             rs1_data = reg_file[rs1];
             
+        // RS2 Read with Forwarding from WB stage (Internal Bypass)
         if (rs2 == 5'h0)
             rs2_data = 32'h0;
+        else if (wb_enable && wb_rd == rs2)
+            rs2_data = reg_write_data;
         else
             rs2_data = reg_file[rs2];
     end
@@ -391,7 +394,3 @@ module id_stage (
 
 
 endmodule
-                
-                        
-                
-                

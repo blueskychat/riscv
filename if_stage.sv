@@ -131,37 +131,39 @@ module if_stage (
         end
     end
     
-    // Wishbone总线访问指令存储器
-    // ICACHE Instantiation
+    // ICACHE signals
+
     logic [31:0] icache_inst;
     logic        icache_ready;
     
+    // ICACHE instantiation
     icache u_icache (
-        .clk           (clk),
-        .rst           (rst),
+        .clk            (clk),
+        .rst            (rst),
         
         // CPU Interface
-        .cpu_req_addr  (pc),
-        .cpu_req_valid (!rst), // Always request if not in reset
-        .cpu_inst      (icache_inst),
-        .cpu_ready     (icache_ready),
+        .pc_i           (pc),
+        .fetch_en_i     (!rst), // Always request if not in reset
+        .inst_o         (icache_inst),
+        .ready_o        (icache_ready),
         
         // Wishbone Master Interface
-        .wb_adr_o      (wb_adr_o),
-        .wb_dat_o      (wb_dat_o),
-        .wb_dat_i      (wb_dat_i),
-        .wb_we_o       (wb_we_o),
-        .wb_sel_o      (wb_sel_o),
-        .wb_stb_o      (wb_stb_o),
-        .wb_ack_i      (wb_ack_i),
-        .wb_cyc_o      (wb_cyc_o),
-        .wb_rty_i      (wb_rty_i),
-        .wb_err_i      (wb_err_i)
+        .wb_adr_o       (wb_adr_o),
+        .wb_dat_o       (wb_dat_o),
+        .wb_dat_i       (wb_dat_i),
+        .wb_we_o        (wb_we_o),
+        .wb_sel_o       (wb_sel_o),
+        .wb_stb_o       (wb_stb_o),
+        .wb_ack_i       (wb_ack_i),
+        .wb_cyc_o       (wb_cyc_o),
+        .wb_rty_i       (wb_rty_i),
+        .wb_err_i       (wb_err_i)
     );
     
     // Stall request if cache is not ready
     assign stall_req = !icache_ready;
 
+    // IF/ID register update
     always_comb begin
         if_id_next = '0;
         if (!flush) begin
