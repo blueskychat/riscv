@@ -5,13 +5,13 @@
 module mem_stage (
     input  wire logic        clk,
     input  wire logic        rst,
-    input  wire logic        stall, // New stall input
+    input  wire logic        stall,
     input  wire logic        flush,
     
     input  ex_mem_reg_t ex_mem_reg,
     output mem_wb_reg_t mem_wb_next,
     
-    // Wishbone master interface
+    // Wishbone master interface (DCache to external)
     output logic [31:0] wb_adr_o,
     output logic [31:0] wb_dat_o,
     input  wire  [31:0] wb_dat_i,
@@ -21,14 +21,26 @@ module mem_stage (
     input  wire         wb_ack_i,
     output logic        wb_cyc_o,
     input  wire         wb_rty_i,
-    input  wire         wb_err_i
+    input  wire         wb_err_i,
+    
+    output logic        stall_req // Output for hazard unit
 );
 
+    // Internal signals for DCache connection
+    logic [31:0] cpu_mem_adr;
+    logic [31:0] cpu_mem_dat_o;
+    logic [31:0] cpu_mem_dat_i;
+    logic        cpu_mem_we;
+    logic [3:0]  cpu_mem_sel;
+    logic        cpu_mem_stb;
+    logic        cpu_mem_ack;
+    logic        cpu_mem_cyc;
+    
     // 内存访问状态机
     typedef enum logic [1:0] {
         MEM_IDLE,
         MEM_WAIT_ACK,
-        MEM_DONE     // New state: Wait for pipeline stall to release
+        MEM_DONE     // Wait for pipeline stall to release
     } mem_state_t;
     
     mem_state_t state, next_state;
@@ -46,22 +58,30 @@ module mem_stage (
     
     // Latch data on ACK
     always_ff @(posedge clk) begin
-        if (state == MEM_WAIT_ACK && (wb_ack_i || wb_err_i)) begin
-            read_data_reg <= wb_dat_i;
+        if (state == MEM_WAIT_ACK && cpu_mem_ack) begin
+            read_data_reg <= cpu_mem_dat_i;
         end
     end
 
+    logic mem_op_pending;
+    // 当有有效的内存读写请求时，mem_op_pending 为高
+    assign mem_op_pending = (ex_mem_reg.mem_read || ex_mem_reg.mem_write) && ex_mem_reg.valid;
+    // Only assert cyc/stb in IDLE (starting) or WAIT_ACK. NOT in DONE.    
+    assign cpu_mem_stb = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
+    assign cpu_mem_cyc = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending); 
+    assign stall_req = cpu_mem_cyc && cpu_mem_stb && !cpu_mem_ack;
+ 
     always_comb begin
         next_state = state;
         
         case (state)
             MEM_IDLE: begin
-                if ((ex_mem_reg.mem_read || ex_mem_reg.mem_write) && ex_mem_reg.valid)
+                if (mem_op_pending)
                     next_state = MEM_WAIT_ACK;
             end
             
             MEM_WAIT_ACK: begin
-                if (wb_ack_i || wb_err_i) begin
+                if (cpu_mem_ack) begin
                     if (stall) 
                         next_state = MEM_DONE; // If stalled, wait in DONE
                     else 
@@ -76,41 +96,62 @@ module mem_stage (
         endcase
     end
     
-    // Wishbone总线信号
-    logic mem_op_pending;
-    // 当有有效的内存读写请求时，mem_op_pending 为高
-    assign mem_op_pending = (ex_mem_reg.mem_read || ex_mem_reg.mem_write) && ex_mem_reg.valid;
-
     always_comb begin
-        wb_adr_o = ex_mem_reg.alu_result;
-        wb_dat_o = ex_mem_reg.rs2_data;
-        wb_we_o = ex_mem_reg.mem_write;
+        cpu_mem_adr = ex_mem_reg.alu_result;
+        cpu_mem_dat_o = ex_mem_reg.rs2_data;
+        cpu_mem_we = ex_mem_reg.mem_write;
         
         // 字节选择信号
         case (ex_mem_reg.mem_width)
             MEM_BYTE: begin
                 case (ex_mem_reg.alu_result[1:0])
-                    2'b00: wb_sel_o = 4'b0001;
-                    2'b01: wb_sel_o = 4'b0010;
-                    2'b10: wb_sel_o = 4'b0100;
-                    2'b11: wb_sel_o = 4'b1000;
+                    2'b00: cpu_mem_sel = 4'b0001;
+                    2'b01: cpu_mem_sel = 4'b0010;
+                    2'b10: cpu_mem_sel = 4'b0100;
+                    2'b11: cpu_mem_sel = 4'b1000;
                 endcase
             end
             MEM_HALF: begin
-                wb_sel_o = ex_mem_reg.alu_result[1] ? 4'b1100 : 4'b0011;
+                cpu_mem_sel = ex_mem_reg.alu_result[1] ? 4'b1100 : 4'b0011;
             end
             MEM_WORD: begin
-                wb_sel_o = 4'b1111;
+                cpu_mem_sel = 4'b1111;
             end
-            default: wb_sel_o = 4'b1111;
+            default: cpu_mem_sel = 4'b1111;
         endcase
-        // Only assert cyc/stb in IDLE (starting) or WAIT_ACK. NOT in DONE.
-        wb_stb_o = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
-        wb_cyc_o = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending); 
-    end
+        
+   end
     
-    // 数据对齐和符号扩展
-    assign mem_data_raw = (state == MEM_DONE) ? read_data_reg : wb_dat_i;
+    // DCache Instantiation
+    dcache u_dcache (
+        .clk            (clk),
+        .rst            (rst),
+        
+        // CPU Interface
+        .mem_req_addr_i (cpu_mem_adr),
+        .mem_req_wdata_i(cpu_mem_dat_o),
+        .mem_req_we_i   (cpu_mem_we),
+        .mem_req_be_i   (cpu_mem_sel),
+        .mem_req_valid_i(cpu_mem_stb), 
+        
+        .mem_resp_data_o(cpu_mem_dat_i),
+        .mem_req_ready_o(cpu_mem_ack), 
+
+        // Wishbone Master Interface
+        .wb_adr_o       (wb_adr_o),
+        .wb_dat_o       (wb_dat_o),
+        .wb_dat_i       (wb_dat_i),
+        .wb_we_o        (wb_we_o),
+        .wb_sel_o       (wb_sel_o),
+        .wb_stb_o       (wb_stb_o),
+        .wb_ack_i       (wb_ack_i),
+        .wb_cyc_o       (wb_cyc_o),
+        .wb_rty_i       (wb_rty_i),
+        .wb_err_i       (wb_err_i)
+    );
+
+    // Data alignment and sign extension
+    assign mem_data_raw = (state == MEM_DONE) ? read_data_reg : cpu_mem_dat_i;
     
     always_comb begin
         case (ex_mem_reg.mem_width)
@@ -182,8 +223,8 @@ module mem_stage (
             mem_wb_next.mem_to_reg = ex_mem_reg.mem_to_reg;
             
             if (ex_mem_reg.mem_read || ex_mem_reg.mem_write) begin
-                // Memory op: valid only when done
-                mem_wb_next.valid = (state == MEM_DONE) || (state == MEM_WAIT_ACK && (wb_ack_i || wb_err_i));
+                // Memory op: valid only when done                
+                mem_wb_next.valid = (state == MEM_DONE) || (state == MEM_WAIT_ACK && cpu_mem_ack);
             end else begin
                 // ALU op: always valid
                 mem_wb_next.valid = 1'b1;

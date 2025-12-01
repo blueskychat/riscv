@@ -394,9 +394,10 @@ module riscv_cpu_top (
     logic inst_mem_wait;
     logic data_mem_wait;
     logic if_stall_req; // Stall request from IF stage (ICACHE)
+    logic mem_stall_req; // Stall request from MEM stage (DCACHE)
 
     assign inst_mem_wait = if_stall_req;
-    assign data_mem_wait = wb_data_cyc && wb_data_stb && !wb_data_ack;
+    assign data_mem_wait = mem_stall_req;
     
     // ==================== 流水线寄存器 ====================
     
@@ -496,7 +497,8 @@ module riscv_cpu_top (
         .wb_ack_i       (wb_data_ack),
         .wb_cyc_o       (wb_data_cyc),
         .wb_rty_i       (wb_data_rty),
-        .wb_err_i       (wb_data_err)
+        .wb_err_i       (wb_data_err),
+        .stall_req      (mem_stall_req)
     );
     
     // 写回级
