@@ -99,32 +99,9 @@ wire wbs2_sel = wbs2_match & ~(wbs0_match | wbs1_match);
 
 wire master_cycle = wb_master_cyc_i & wb_master_stb_i;
 
-// ============================================================================
-// Magic Address Support for Simulation (0x9xxxxxxx)
-// ============================================================================
-`ifdef SIMU
-    // Magic address detection for simulation print (0x9xxxxxxx)
-    wire magic_addr_sel = (wb_master_adr_i[31:28] == 4'h9) & master_cycle;
-    
-    // Register for one-cycle ACK on magic address - use edge detection
-    reg magic_addr_sel_prev;
-    always @(posedge clk) begin
-        if (rst)
-            magic_addr_sel_prev <= 1'b0;
-        else
-            magic_addr_sel_prev <= magic_addr_sel;
-    end
-    
-    // ACK on rising edge of magic_addr_sel only
-    wire magic_addr_ack = magic_addr_sel & ~magic_addr_sel_prev;
-`else
-    // FPGA mode: disable Magic Address support completely
-    wire magic_addr_sel = 1'b0;
-    wire magic_addr_ack = 1'b0;
-`endif
 
-// Error detection - exclude magic address from bus error
-wire select_error = ~(wbs0_sel | wbs1_sel | wbs2_sel | magic_addr_sel) & master_cycle;
+
+wire select_error = ~(wbs0_sel | wbs1_sel | wbs2_sel) & master_cycle;
 
 // master
 assign wb_master_dat_o = wbs0_sel ? wb_slave0_dat_i :
@@ -134,8 +111,7 @@ assign wb_master_dat_o = wbs0_sel ? wb_slave0_dat_i :
 
 assign wb_master_ack_o = wb_slave0_ack_i |
                    wb_slave1_ack_i |
-                   wb_slave2_ack_i |
-                   magic_addr_ack;  // Add magic address ACK
+                   wb_slave2_ack_i;
 assign wb_master_err_o = wb_slave0_err_i |
                    wb_slave1_err_i |
                    wb_slave2_err_i |

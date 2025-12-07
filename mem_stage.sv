@@ -56,9 +56,9 @@ module mem_stage (
             state <= next_state;
     end
     
-    // Latch data on ACK
+    // Latch data on ACK (both immediate in IDLE and after wait)
     always_ff @(posedge clk) begin
-        if (state == MEM_WAIT_ACK && cpu_mem_ack) begin
+        if (cpu_mem_ack && (state == MEM_WAIT_ACK || (state == MEM_IDLE && mem_op_pending))) begin
             read_data_reg <= cpu_mem_dat_i;
         end
     end
@@ -69,15 +69,22 @@ module mem_stage (
     // Only assert cyc/stb in IDLE (starting) or WAIT_ACK. NOT in DONE.    
     assign cpu_mem_stb = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
     assign cpu_mem_cyc = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending); 
-    assign stall_req = cpu_mem_cyc && cpu_mem_stb && !cpu_mem_ack;
+    
+    // Only stall if operation is pending AND ACK is not immediate
+    // Single-cycle operations (magic addr, future cache hits) should NOT stall
+    assign stall_req = mem_op_pending && !cpu_mem_ack && (state == MEM_IDLE || state == MEM_WAIT_ACK);
  
     always_comb begin
         next_state = state;
         
         case (state)
             MEM_IDLE: begin
-                if (mem_op_pending)
-                    next_state = MEM_WAIT_ACK;
+                if (mem_op_pending) begin
+                    if (cpu_mem_ack)
+                        next_state = MEM_IDLE;  // Single-cycle op: stay in IDLE
+                    else
+                        next_state = MEM_WAIT_ACK;  // Multi-cycle: enter wait
+                end
             end
             
             MEM_WAIT_ACK: begin
