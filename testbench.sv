@@ -353,7 +353,7 @@ module testbench;
         #40000;
         */
         #2000;
-        uart.pc_send_byte(8'h72);
+        //uart.pc_send_byte(8'h72);
         #1000000;
        /* 
         // 检查结果
@@ -368,17 +368,36 @@ module testbench;
         end
         */
         #10000;
+        /*
         byte_cnt=0;
         for (logic [31:0] word_addr = 32'h100 >> 2; word_addr < (32'h100 >> 2) + 1; word_addr++) begin
             read_sram_word(word_addr, word_data);
             $display("Word %2d  ->  address 0x%08x  data 0x%08h",
                      byte_cnt++, (word_addr << 2), word_data);
         end
+        */
         #10000000
 
         $finish;
     end
     
+    // ============================================================================
+    // Fast Simulation Print Monitor (Magic Address 0x9xxxxxxx)
+    // ============================================================================
+    // When CPU writes to address range 0x90000000 ~ 0x9FFFFFFF,
+    // immediately print the lowest byte to terminal for fast debug output.
+    // This is ~4300x faster than UART output at 115200 baud!
+    // ============================================================================
+    always @(posedge clk_50M) begin
+        // Monitor Wishbone master bus for writes to Magic Address range
+        // Use wb_master signals (after arbitration, going to wb_mux)
+        if (dut.wb_master_we && dut.wb_master_stb && dut.wb_master_cyc && 
+            dut.wb_master_adr[31:28] == 4'h9) begin
+            $write("%c", dut.wb_master_dat_o[7:0]);
+            $fflush();  // Flush immediately for real-time output
+        end
+    end
+
     // 波形输出
     /*
     initial begin
