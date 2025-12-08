@@ -381,23 +381,6 @@ module testbench;
         $finish;
     end
     
-    // ============================================================================
-    // Fast Simulation Print Monitor (Magic Address 0x9xxxxxxx)
-    // ============================================================================
-    // When CPU writes to address range 0x90000000 ~ 0x9FFFFFFF,
-    // immediately print the lowest byte to terminal for fast debug output.
-    // This is ~4300x faster than UART output at 115200 baud!
-    // ============================================================================
-    always @(posedge clk_50M) begin
-        // Monitor Wishbone master bus for writes to Magic Address range
-        // Use wb_master signals (after arbitration, going to wb_mux)
-        if (dut.wb_master_we && dut.wb_master_stb && dut.wb_master_cyc && 
-            dut.wb_master_adr[31:28] == 4'h9) begin
-            $write("%c", dut.wb_master_dat_o[7:0]);
-            $fflush();  // Flush immediately for real-time output
-        end
-    end
-
     // 波形输出
     /*
     initial begin
