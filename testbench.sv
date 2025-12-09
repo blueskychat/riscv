@@ -376,7 +376,7 @@ module testbench;
                      byte_cnt++, (word_addr << 2), word_data);
         end
         */
-        #10000000
+        #60000000
 
         $finish;
     end
