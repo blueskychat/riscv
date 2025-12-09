@@ -230,8 +230,13 @@ module mem_stage (
             mem_wb_next.mem_to_reg = ex_mem_reg.mem_to_reg;
             
             if (ex_mem_reg.mem_read || ex_mem_reg.mem_write) begin
-                // Memory op: valid only when done                
-                mem_wb_next.valid = (state == MEM_DONE) || (state == MEM_WAIT_ACK && cpu_mem_ack);
+                // Memory op: valid when done or on single-cycle hit
+                // - MEM_DONE: waited for stall, now releasing
+                // - MEM_WAIT_ACK && ack: multi-cycle op completed
+                // - MEM_IDLE && ack && op_pending: single-cycle op (cache hit!)
+                mem_wb_next.valid = (state == MEM_DONE) || 
+                                    (state == MEM_WAIT_ACK && cpu_mem_ack) ||
+                                    (state == MEM_IDLE && cpu_mem_ack && mem_op_pending);
             end else begin
                 // ALU op: always valid
                 mem_wb_next.valid = 1'b1;
