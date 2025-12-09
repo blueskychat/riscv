@@ -1,19 +1,19 @@
 `include "defines.sv"
 
 // =============================================================================
-// DCache - Phase 4: Two-Level Cache (L2 Read-Only)
+// DCache - Phase 5: Complete Two-Level Write-Back Cache
 // =============================================================================
 // L1: 1KB, Direct-Mapped, LUTRAM, 16-byte lines
 // - Read operations: cache enabled
-// - Write hit: update L1 data, set dirty=1 (no write to memory yet)
-// - Write miss: write-allocate (evict -> L2 lookup -> refill -> write to L1)
-// - Eviction: if dirty, writeback to memory (Phase 3 behavior, L2 write in Phase 5)
+// - Write hit: update L1 data, set dirty=1
+// - Write miss: write-allocate (evict dirty → L2, L2 lookup → refill → write L1)
+// - Eviction: if dirty, writeback to L2 (not memory)
 // 
 // L2: 32KB, 4-Way Set-Associative, BRAM, 16-byte lines
-// - L1 miss -> L2 lookup (1 cycle BRAM latency)
-// - L2 hit -> fill L1, return data
-// - L2 miss -> fetch from memory, fill L2 (pseudo-LRU), fill L1
-// - Write operations: Bypass L2 for now (Phase 5 will add L1->L2 writeback)
+// - L1 miss → L2 lookup (1 cycle BRAM latency)
+// - L2 hit → fill L1, return data
+// - L2 miss → if victim dirty, writeback to memory; fetch from memory, fill L2+L1
+// - L1 dirty eviction → UPDATE L2 entry, set L2 dirty bit
 // =============================================================================
 
 module dcache (
@@ -107,6 +107,7 @@ module dcache (
     (* ram_style = "block" *) logic [127:0] l2_data [L2_WAYS-1:0][L2_SETS-1:0];
     (* ram_style = "block" *) logic [L2_TAG_WIDTH-1:0] l2_tag_array [L2_WAYS-1:0][L2_SETS-1:0];
     logic l2_valid [L2_WAYS-1:0][L2_SETS-1:0];
+    logic l2_dirty [L2_WAYS-1:0][L2_SETS-1:0];  // Phase 5: L2 dirty bits
     logic [2:0] l2_lru [L2_SETS-1:0];  // 3-bit pseudo-LRU per set
 
     // ========================================================================
@@ -140,6 +141,7 @@ module dcache (
     logic [127:0] l2_data_read [L2_WAYS-1:0];
     logic [L2_TAG_WIDTH-1:0] l2_tag_read [L2_WAYS-1:0];
     logic l2_valid_read [L2_WAYS-1:0];
+    logic l2_dirty_read [L2_WAYS-1:0];  // Phase 5: dirty bits from BRAM
     
     // L2 hit detection (combinational on registered BRAM outputs)
     logic [L2_WAYS-1:0] l2_way_hit;
@@ -161,6 +163,28 @@ module dcache (
             end
         end
     end
+    
+    // Phase 5: L2 victim dirty detection (for L2 miss case)
+    // Victim is selected by pseudo-LRU when we need to allocate new entry
+    wire [1:0] l2_victim_way_comb = get_lru_victim(l2_lru[l2_lookup_index]);
+    wire l2_victim_dirty = l2_valid_read[l2_victim_way_comb] && l2_dirty_read[l2_victim_way_comb];
+    
+    // Phase 5: L1 invalidation check for inclusive cache property
+    // When L2 evicts a victim, must check if L1 holds that line
+    // If yes, must invalidate L1 (and writeback if dirty) to maintain inclusivity
+    wire [31:0] l2_victim_addr = {l2_tag_read[l2_victim_way_comb], l2_lookup_index, 4'b0000};
+    wire [L1_INDEX_WIDTH-1:0] l1_victim_index = l2_victim_addr[9:4];
+    wire [L1_TAG_WIDTH-1:0]   l1_victim_tag   = l2_victim_addr[31:10];
+    
+    // Check if L1 holds the L2 victim line
+    wire l1_holds_l2_victim = l2_valid_read[l2_victim_way_comb] &&
+                               l1_valid[l1_victim_index] && 
+                               (l1_tag_array[l1_victim_index] == l1_victim_tag);
+    wire l1_victim_needs_wb = l1_holds_l2_victim && l1_dirty[l1_victim_index];
+    
+    // L2 writeback data storage (latched when entering L2_WRITEBACK)
+    logic [L2_TAG_WIDTH-1:0] l2_wb_tag;
+    logic [127:0] l2_wb_data;
     
     // ========================================================================
     // Pseudo-LRU Functions (3-bit tree for 4-way)
@@ -197,11 +221,13 @@ module dcache (
     // ========================================================================
     typedef enum logic [2:0] {
         IDLE,
-        REFILL,         // Phase 1-3: Fetching cache line from memory (4 beats)
+        REFILL,         // Legacy: Direct L1 refill from memory (Phase 1-3)
         BYPASS_OP,      // Bypass operation (non-cacheable)
-        WRITEBACK,      // Phase 3: Write dirty L1 line back to memory
-        L2_LOOKUP,      // Phase 4: Wait for L2 BRAM read (1 cycle)
-        L2_REFILL       // Phase 4: Fetch from memory to fill L2 (4 beats)
+        L1_TO_L2,       // Phase 5: Write dirty L1 line to L2 (was WRITEBACK)
+        L2_LOOKUP,      // Phase 4-5: Wait for L2 BRAM read (1 cycle)
+        L2_REFILL,      // Phase 4-5: Fetch from memory to fill L2 (4 beats)
+        L2_WRITEBACK,   // Phase 5: Write dirty L2 victim to memory (4 beats)
+        L1_VICTIM_WB    // Phase 5: Write L1 victim dirty data to L2 before L2 eviction
     } state_t;
     
     state_t state, next_state;
@@ -320,9 +346,9 @@ module dcache (
                             end
                         end else begin
                             // L1 Miss (Read or Write)
-                            // Phase 4: Check for dirty eviction, then go to L2
+                            // Phase 5: Check for dirty eviction, write to L2 first
                             if (l1_valid[l1_index] && l1_dirty[l1_index]) begin
-                                next_state = WRITEBACK; // Write back dirty line first
+                                next_state = L1_TO_L2; // Write dirty L1 line to L2
                             end else begin
                                 next_state = L2_LOOKUP;  // Clean miss, check L2
                             end
@@ -340,8 +366,18 @@ module dcache (
                     // L2 hit: Fill L1 from L2, complete immediately
                     next_state = IDLE;
                 end else begin
-                    // L2 miss: Fetch from memory
-                    next_state = L2_REFILL;
+                    // L2 miss: Need to evict victim and refill
+                    // Phase 5: First check if L1 has dirty data for L2 victim
+                    if (l1_victim_needs_wb) begin
+                        // L1 has dirty version of L2 victim - must writeback to L2 first
+                        next_state = L1_VICTIM_WB;
+                    end else if (l2_victim_dirty) begin
+                        // L2 victim is dirty, writeback to memory
+                        next_state = L2_WRITEBACK;
+                    end else begin
+                        // Victim is clean (or only L1 holds clean copy), proceed to refill
+                        next_state = L2_REFILL;
+                    end
                 end
             end
             
@@ -367,11 +403,25 @@ module dcache (
                 end
             end
             
-            WRITEBACK: begin
+            L1_TO_L2: begin
+                // Phase 5: Single cycle write of L1 dirty line to L2
+                // L2 always contains L1 (inclusive), so this is an UPDATE
+                next_state = L2_LOOKUP;
+            end
+            
+            L2_WRITEBACK: begin
+                // Phase 5: Write dirty L2 victim to memory (4 beats)
                 if (wb_ack_i && refill_counter == 2'b11) begin
-                    // Writeback done, now check L2
-                    next_state = L2_LOOKUP;
+                    // L2 writeback done, now do actual refill
+                    next_state = L2_REFILL;
                 end
+            end
+            
+            L1_VICTIM_WB: begin
+                // Phase 5: Single cycle write of L1 victim dirty data to L2 victim
+                // This updates L2 victim with L1's dirty data before L2 eviction
+                // After this, L2 victim is dirty and must be written back to memory
+                next_state = L2_WRITEBACK;
             end
             
             default: next_state = IDLE;
@@ -384,9 +434,9 @@ module dcache (
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             refill_counter <= 2'b00;
-        end else if (state != REFILL && state != WRITEBACK && state != L2_REFILL) begin
+        end else if (state != REFILL && state != L2_REFILL && state != L2_WRITEBACK) begin
             refill_counter <= 2'b00;
-        end else if ((state == REFILL || state == WRITEBACK || state == L2_REFILL) && wb_ack_i) begin
+        end else if ((state == REFILL || state == L2_REFILL || state == L2_WRITEBACK) && wb_ack_i) begin
             refill_counter <= refill_counter + 2'b01;
         end
     end
@@ -406,14 +456,22 @@ module dcache (
     end
     
     // ========================================================================
-    // L2 BRAM Read Logic (Phase 4)
+    // L2 BRAM Read Logic (Phase 4-5)
     // ========================================================================
-    // When entering L2_LOOKUP state, we latch the lookup parameters and
-    // read from all 4 ways. Results are available next cycle for hit detection.
+    // Read from L2 BRAM when:
+    // 1. Entering L2_LOOKUP: read new address to check hit/miss
+    // 2. Entering L1_TO_L2: read evicted address to find target way
+    // Results are available next cycle.
+    
+    // Compute evicted address L2 index for BRAM read
+    // CRITICAL: When transitioning IDLE→L1_TO_L2, old_tag/latched_index are being latched
+    // on the SAME clock edge, so we must use LIVE signals here (not latched).
+    wire [L1_TAG_WIDTH-1:0] evict_tag_live = l1_tag_array[l1_index];
+    wire [L2_INDEX_WIDTH-1:0] evict_l2_idx = {evict_tag_live[L2_INDEX_WIDTH-L1_INDEX_WIDTH-1:0], l1_index};
     
     always_ff @(posedge clk) begin
         if (state == IDLE && next_state == L2_LOOKUP) begin
-            // Latch lookup parameters when starting L2 lookup
+            // Latch lookup parameters for new address
             l2_lookup_index <= l2_index;
             l2_lookup_tag   <= l2_tag;
             l2_lookup_word  <= l2_word;
@@ -423,12 +481,47 @@ module dcache (
     // BRAM read: synchronous read
     always_ff @(posedge clk) begin
         if (state == IDLE && next_state == L2_LOOKUP) begin
-            // Read all 4 ways at the target index
+            // Read all 4 ways at the NEW address index
             for (int w = 0; w < L2_WAYS; w++) begin
                 l2_data_read[w]  <= l2_data[w][l2_index];
                 l2_tag_read[w]   <= l2_tag_array[w][l2_index];
                 l2_valid_read[w] <= l2_valid[w][l2_index];
+                l2_dirty_read[w] <= l2_dirty[w][l2_index];  // Phase 5: read dirty bits
             end
+        end else if (state == IDLE && next_state == L1_TO_L2) begin
+            // Read all 4 ways at the EVICTED address index (to find target way)
+            for (int w = 0; w < L2_WAYS; w++) begin
+                l2_data_read[w]  <= l2_data[w][evict_l2_idx];
+                l2_tag_read[w]   <= l2_tag_array[w][evict_l2_idx];
+                l2_valid_read[w] <= l2_valid[w][evict_l2_idx];
+                l2_dirty_read[w] <= l2_dirty[w][evict_l2_idx];  // Phase 5
+            end
+        end else if (state == L1_TO_L2 && next_state == L2_LOOKUP) begin
+            // After L1_TO_L2, read for the NEW address lookup
+            for (int w = 0; w < L2_WAYS; w++) begin
+                l2_data_read[w]  <= l2_data[w][l2_index];
+                l2_tag_read[w]   <= l2_tag_array[w][l2_index];
+                l2_valid_read[w] <= l2_valid[w][l2_index];
+                l2_dirty_read[w] <= l2_dirty[w][l2_index];  // Phase 5
+            end
+            // Also latch lookup parameters
+            l2_lookup_index <= l2_index;
+            l2_lookup_tag   <= l2_tag;
+            l2_lookup_word  <= l2_word;
+        end
+    end
+    
+    // Phase 5: Latch L2 victim data when entering L2_WRITEBACK
+    always_ff @(posedge clk) begin
+        if (state == L2_LOOKUP && next_state == L2_WRITEBACK) begin
+            // Latch victim way's tag and data for memory writeback (L2 already dirty)
+            l2_wb_tag  <= l2_tag_read[l2_victim_way_comb];
+            l2_wb_data <= l2_data_read[l2_victim_way_comb];
+        end else if (state == L1_VICTIM_WB && next_state == L2_WRITEBACK) begin
+            // Coming from L1_VICTIM_WB: we just wrote L1 data to L2, writeback that
+            // Tag is still the L2 victim's original tag
+            l2_wb_tag  <= l2_tag_read[l2_victim_way_comb];
+            l2_wb_data <= l1_data[l1_victim_index];  // Use L1's dirty data
         end
     end
 
@@ -548,12 +641,45 @@ module dcache (
     end
     
     // ========================================================================
-    // L2 Cache Update Logic (Phase 4)
+    // L2 Cache Update Logic (Phase 5)
     // ========================================================================
-    // L2 is updated on L2_REFILL completion (memory fetch)
-    // L2 is also updated on L2 hit (LRU update)
+    // L2 is updated on:
+    // 1. L2_REFILL completion (memory fetch) - dirty=0
+    // 2. L2 hit (LRU update only)
+    // 3. L1_TO_L2 (dirty L1 writeback) - dirty=1
     
     logic [1:0] l2_victim_way;
+    
+    // Evicted L1 line's L2 address (computed from old_tag + latched_index)
+    wire [31:0] evicted_addr = {old_tag, latched_index, 4'b0000};
+    wire [L2_TAG_WIDTH-1:0]   evicted_l2_tag   = evicted_addr[31:13];
+    wire [L2_INDEX_WIDTH-1:0] evicted_l2_index = evicted_addr[12:4];
+    
+    // L2 way that holds the evicted L1 line (for L1_TO_L2 update)
+    // Since L2 is inclusive, the evicted line MUST be in L2
+    // We use the l2_lookup results which were read when entering L1_TO_L2
+    logic [1:0] l1_to_l2_target_way;
+    logic l1_to_l2_found;
+    
+    // Combinational logic to find which L2 way has the evicted line
+    always_comb begin
+        l1_to_l2_found = 1'b0;
+        l1_to_l2_target_way = 2'b00;
+        for (int w = 0; w < L2_WAYS; w++) begin
+            if (l2_valid_read[w] && (l2_tag_read[w] == evicted_l2_tag)) begin
+                l1_to_l2_found = 1'b1;
+                l1_to_l2_target_way = w[1:0];
+            end
+        end
+    end
+    
+    // L1 data to write to L2 (captured when entering L1_TO_L2)
+    logic [127:0] l1_evicted_data;
+    always_ff @(posedge clk) begin
+        if (state == IDLE && next_state == L1_TO_L2) begin
+            l1_evicted_data <= l1_data[l1_index];
+        end
+    end
     
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -561,23 +687,78 @@ module dcache (
                 l2_lru[i] <= 3'b000;
                 for (j = 0; j < L2_WAYS; j = j + 1) begin
                     l2_valid[j][i] <= 1'b0;
+                    l2_dirty[j][i] <= 1'b0;  // Phase 5: init dirty bits
                 end
             end
+        end else if (state == L1_TO_L2) begin
+            // Phase 5: Write dirty L1 data to L2 (UPDATE existing entry)
+            // L2 BRAM was read when entering this state, results in l2_*_read
+            if (l1_to_l2_found) begin
+                l2_data[l1_to_l2_target_way][evicted_l2_index] <= l1_evicted_data;
+                l2_dirty[l1_to_l2_target_way][evicted_l2_index] <= 1'b1;
+                l2_lru[evicted_l2_index] <= update_lru(l2_lru[evicted_l2_index], l1_to_l2_target_way);
+            end
+            // Note: If not found (shouldn't happen in inclusive cache), silently ignore
+            
         end else if (state == L2_LOOKUP && l2_hit) begin
             // L2 Hit: Update LRU
             l2_lru[l2_lookup_index] <= update_lru(l2_lru[l2_lookup_index], l2_hit_way);
+            
+        end else if (state == L1_VICTIM_WB) begin
+            // Phase 5: Write L1 victim dirty data to L2 victim way
+            // This happens BEFORE L2 victim is evicted to memory
+            // After this, L2 victim has L1's dirty data and must be written back
+            l2_data[l2_victim_way_comb][l2_lookup_index] <= l1_data[l1_victim_index];
+            l2_dirty[l2_victim_way_comb][l2_lookup_index] <= 1'b1;  // Now dirty!
+            // Note: Don't update LRU here - victim is about to be evicted anyway
+            
+            // Invalidate L1 (maintain inclusive property)
+            l1_valid[l1_victim_index] <= 1'b0;
             
         end else if (state == L2_REFILL && wb_ack_i && refill_counter == 2'b11) begin
             // L2 Refill complete: Write new line to L2
             l2_victim_way = get_lru_victim(l2_lru[l2_lookup_index]);
             
-            // Fill the victim way
+            // Phase 5: Inclusive cache maintenance
+            // Before evicting L2 victim, check if L1 holds it (computed earlier)
+            // Note: l1_holds_l2_victim and l1_victim_needs_wb use registered values
+            // from L2_LOOKUP state, which are still valid here
+            
+            // If L1 has dirty data for the L2 victim, must update L2 first
+            // (This makes L2 victim dirty, will be written to memory next time)
+            // For now, we accept potential data loss if L1 has dirty victim data
+            // TODO: This is a known limitation - should add state to handle L1 victim writeback
+            
+            // Fill the victim way with new data from memory
             l2_data[l2_victim_way][l2_lookup_index]      <= {wb_dat_i, refill_data[95:0]};
             l2_tag_array[l2_victim_way][l2_lookup_index] <= l2_lookup_tag;
             l2_valid[l2_victim_way][l2_lookup_index]     <= 1'b1;
+            l2_dirty[l2_victim_way][l2_lookup_index]     <= 1'b0;  // Phase 5: clean from memory
             
             // Update LRU
             l2_lru[l2_lookup_index] <= update_lru(l2_lru[l2_lookup_index], l2_victim_way);
+            
+            // Phase 5: Invalidate L1 if it holds the evicted L2 victim line
+            // This maintains the inclusive property: L1 valid lines must be in L2
+            // Note: If L1 had dirty data, it's lost here (known limitation)
+            if (l1_holds_l2_victim_latched) begin
+                l1_valid[l1_victim_index_latched] <= 1'b0;
+            end
+        end
+    end
+    
+    // Phase 5: Latch L1 victim info when entering L2_REFILL for later invalidation
+    logic l1_holds_l2_victim_latched;
+    logic [L1_INDEX_WIDTH-1:0] l1_victim_index_latched;
+    
+    always_ff @(posedge clk) begin
+        if (state == L2_LOOKUP && next_state == L2_REFILL) begin
+            l1_holds_l2_victim_latched <= l1_holds_l2_victim;
+            l1_victim_index_latched <= l1_victim_index;
+        end else if (state == L2_LOOKUP && next_state == L2_WRITEBACK) begin
+            // Also latch when going to L2_WRITEBACK (will eventually go to L2_REFILL)
+            l1_holds_l2_victim_latched <= l1_holds_l2_victim;
+            l1_victim_index_latched <= l1_victim_index;
         end
     end
 
@@ -619,25 +800,26 @@ module dcache (
                 wb_cyc_o = 1'b1;
             end
             
-            WRITEBACK: begin
-                // Write dirty line back to memory
-                wb_adr_o = wb_evict_addr + {28'b0, refill_counter, 2'b00};
+            L2_WRITEBACK: begin
+                // Phase 5: Write dirty L2 victim line back to memory
+                // L2 victim address constructed from l2_lookup (tag + index)
+                wb_adr_o = {l2_wb_tag, l2_lookup_index, 4'b0000} + {28'b0, refill_counter, 2'b00};
                 wb_we_o  = 1'b1;
                 wb_sel_o = 4'b1111;
                 wb_stb_o = 1'b1;
                 wb_cyc_o = 1'b1;
                 
-                // Select word to write
+                // Select word to write from L2 victim data
                 case (refill_counter)
-                    2'b00: wb_dat_o = l1_data[latched_index][31:0];
-                    2'b01: wb_dat_o = l1_data[latched_index][63:32];
-                    2'b10: wb_dat_o = l1_data[latched_index][95:64];
-                    2'b11: wb_dat_o = l1_data[latched_index][127:96];
+                    2'b00: wb_dat_o = l2_wb_data[31:0];
+                    2'b01: wb_dat_o = l2_wb_data[63:32];
+                    2'b10: wb_dat_o = l2_wb_data[95:64];
+                    2'b11: wb_dat_o = l2_wb_data[127:96];
                 endcase
             end
             
             default: begin
-                // IDLE + L2_LOOKUP - no wishbone activity
+                // IDLE, L1_TO_L2, L2_LOOKUP - no wishbone activity
             end
         endcase
     end
