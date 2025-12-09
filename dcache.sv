@@ -1,12 +1,13 @@
 `include "defines.sv"
 
 // =============================================================================
-// DCache - Phase 2: L1 Write-Through Cache
+// DCache - Phase 3: L1 Write-Back Cache
 // =============================================================================
 // L1: 1KB, Direct-Mapped, LUTRAM, 16-byte lines
-// - Read operations: cache enabled (from Phase 1)
-// - Write hit: update L1 data AND write-through to memory
-// - Write miss: only write to memory (no write-allocate)
+// - Read operations: cache enabled
+// - Write hit: update L1 data, set dirty=1 (no write to memory)
+// - Write miss: write-allocate (evict -> refill -> write to L1)
+// - Eviction: if dirty, writeback to memory before refill
 // =============================================================================
 
 module dcache (
@@ -76,6 +77,7 @@ module dcache (
     (* ram_style = "distributed" *) logic [127:0] l1_data [L1_SETS-1:0];
     (* ram_style = "distributed" *) logic [L1_TAG_WIDTH-1:0] l1_tag_array [L1_SETS-1:0];
     logic l1_valid [L1_SETS-1:0];
+    logic l1_dirty [L1_SETS-1:0];  // Dirty bits for write-back
 
     // ========================================================================
     // L1 Cache Lookup (Combinational - for single-cycle hit)
@@ -100,8 +102,9 @@ module dcache (
     typedef enum logic [2:0] {
         IDLE,
         REFILL,         // Fetching cache line from memory (4 beats)
-        BYPASS_OP,      // Bypass operation (non-cacheable or write miss)
-        WRITE_THROUGH   // Phase 2: Write-through (update L1 + write to memory)
+        BYPASS_OP,      // Bypass operation (non-cacheable)
+        WRITEBACK,      // Phase 3: Write dirty line back to memory
+        WAIT_WRITE      // Phase 3: Wait for writeback completion (if needed)
     } state_t;
     
     state_t state, next_state;
@@ -121,10 +124,17 @@ module dcache (
     logic [L1_TAG_WIDTH-1:0]   latched_tag;
     logic [L1_WORD_OFFSET_WIDTH-1:0] latched_word;
     
+    // Eviction address info
+    logic [L1_TAG_WIDTH-1:0] old_tag;
+    logic                    is_dirty_eviction;
+    
     // Refill address - use latched address for multi-cycle safety
     // CRITICAL: Must use latched_addr, not mem_req_addr_i, because CPU may
     // change the address during multi-cycle REFILL operation
     wire [31:0] refill_addr = {latched_addr[31:4], 4'b0000};
+    
+    // Writeback address - use old tag and latched index
+    wire [31:0] wb_evict_addr = {old_tag, latched_index, 4'b0000};
 
     // ========================================================================
     // Magic Address Handling (Simulation Only)
@@ -185,6 +195,10 @@ module dcache (
             latched_index <= l1_index;
             latched_tag   <= l1_tag;
             latched_word  <= l1_word;
+            
+            // Capture victim info for potential eviction
+            old_tag       <= l1_tag_array[l1_index];
+            is_dirty_eviction <= l1_valid[l1_index] && l1_dirty[l1_index];
         end
     end
 
@@ -197,23 +211,27 @@ module dcache (
         case (state)
             IDLE: begin
                 if (mem_req_valid_i && !is_magic_addr) begin
-                    if (mem_req_we_i) begin
-                        // Phase 2: Distinguish write hit vs write miss
+                    if (is_cacheable) begin
                         if (l1_hit) begin
-                            // Write hit - update L1 and write-through to memory
-                            next_state = WRITE_THROUGH;
+                            if (mem_req_we_i) begin
+                                // Write hit: Update L1 immediately (done in IDLE), set dirty
+                                // No state change needed, ready_o will be 1
+                                next_state = IDLE; 
+                            end else begin
+                                // Read hit: Return data immediately
+                                next_state = IDLE;
+                            end
                         end else begin
-                            // Write miss - only write to memory (no write-allocate)
-                            next_state = BYPASS_OP;
+                            // Miss (Read or Write): Need refilling
+                            // NEW: Check for dirty eviction first
+                            if (l1_valid[l1_index] && l1_dirty[l1_index]) begin
+                                next_state = WRITEBACK; // Write back dirty line first
+                            end else begin
+                                next_state = REFILL;    // Clean miss, go straight to refill
+                            end
                         end
-                    end else if (l1_hit) begin
-                        // Read hit - stay in IDLE, return data immediately
-                        next_state = IDLE;
-                    end else if (is_cacheable) begin
-                        // Read miss on cacheable address - start refill
-                        next_state = REFILL;
                     end else begin
-                        // Read from bypass region
+                        // Non-cacheable access -> Bypass
                         next_state = BYPASS_OP;
                     end
                 end
@@ -231,10 +249,10 @@ module dcache (
                 end
             end
             
-            WRITE_THROUGH: begin
-                // Wait for memory write to complete
-                if (wb_ack_i) begin
-                    next_state = IDLE;
+            WRITEBACK: begin
+                if (wb_ack_i && refill_counter == 2'b11) begin
+                    // Writeback done, now start refill
+                    next_state = REFILL; 
                 end
             end
             
@@ -248,9 +266,9 @@ module dcache (
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             refill_counter <= 2'b00;
-        end else if (state != REFILL) begin
+        end else if (state != REFILL && state != WRITEBACK) begin
             refill_counter <= 2'b00;
-        end else if (state == REFILL && wb_ack_i) begin
+        end else if ((state == REFILL || state == WRITEBACK) && wb_ack_i) begin
             refill_counter <= refill_counter + 2'b01;
         end
     end
@@ -298,22 +316,67 @@ module dcache (
         endcase
     end
     
+    // Refill data with write-allocate merge
+    logic [127:0] refill_line_merged;
+    logic [31:0]  refill_word_merged;
+    logic [127:0] refill_line_full;  // Complete refill line
+    
+    always_comb begin
+        // First, construct the COMPLETE refill line (including last beat)
+        refill_line_full = {wb_dat_i, refill_data[95:0]};
+        
+        // Extract the target word from the complete line
+        case (latched_word)
+            2'b00: refill_word_merged = refill_line_full[31:0];
+            2'b01: refill_word_merged = refill_line_full[63:32];
+            2'b10: refill_word_merged = refill_line_full[95:64];
+            2'b11: refill_word_merged = refill_line_full[127:96];
+        endcase
+        
+        // Apply byte-enable mask for write-allocate
+        if (latched_we) begin
+             if (latched_be[0]) refill_word_merged[7:0]   = latched_wdata[7:0];
+             if (latched_be[1]) refill_word_merged[15:8]  = latched_wdata[15:8];
+             if (latched_be[2]) refill_word_merged[23:16] = latched_wdata[23:16];
+             if (latched_be[3]) refill_word_merged[31:24] = latched_wdata[31:24];
+        end
+        
+        // Construct the final merged line
+        refill_line_merged = refill_line_full;
+        if (latched_we) begin
+             case (latched_word)
+                 2'b00: refill_line_merged[31:0]   = refill_word_merged;
+                 2'b01: refill_line_merged[63:32]  = refill_word_merged;
+                 2'b10: refill_line_merged[95:64]  = refill_word_merged;
+                 2'b11: refill_line_merged[127:96] = refill_word_merged;
+             endcase
+        end
+    end
+    
     integer i;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             for (i = 0; i < L1_SETS; i = i + 1) begin
                 l1_valid[i] <= 1'b0;
+                l1_dirty[i] <= 1'b0;
             end
         end else if (state == REFILL && wb_ack_i && refill_counter == 2'b11) begin
             // Refill complete - write cache line
-            l1_data[latched_index] <= {wb_dat_i, refill_data[95:0]};
+            // If Write-Allocate (latched_we=1), we write the MERGED line and set DIRTY
+            if (latched_we) begin
+                l1_data[latched_index]  <= refill_line_merged;
+                l1_dirty[latched_index] <= 1'b1;  // Dirty because we modified it
+            end else begin
+                l1_data[latched_index]  <= {wb_dat_i, refill_data[95:0]};
+                l1_dirty[latched_index] <= 1'b0;  // Clean (fresh from memory)
+            end
             l1_tag_array[latched_index] <= latched_tag;
-            l1_valid[latched_index] <= 1'b1;
-        end else if (state == IDLE && next_state == WRITE_THROUGH) begin
-            // Write-through: update L1 cache line immediately
-            // Use l1_index (current address), not latched_index
+            l1_valid[latched_index]     <= 1'b1;
+            
+        end else if (state == IDLE && mem_req_valid_i && l1_hit && mem_req_we_i) begin
+            // Write Hit: update L1 cache line immediately
             l1_data[l1_index] <= write_through_line;
-            // Tag and valid remain unchanged (already valid and matching)
+            l1_dirty[l1_index] <= 1'b1; // Mark as dirty
         end
     end
 
@@ -346,14 +409,21 @@ module dcache (
                 wb_cyc_o = 1'b1;
             end
             
-            WRITE_THROUGH: begin
-                // Write to memory (same as bypass write)
-                wb_adr_o = latched_addr;
-                wb_dat_o = latched_wdata;
+            WRITEBACK: begin
+                // Write dirty line back to memory
+                wb_adr_o = wb_evict_addr + {28'b0, refill_counter, 2'b00};
                 wb_we_o  = 1'b1;
-                wb_sel_o = latched_be;
+                wb_sel_o = 4'b1111;
                 wb_stb_o = 1'b1;
                 wb_cyc_o = 1'b1;
+                
+                // Select word to write
+                case (refill_counter)
+                    2'b00: wb_dat_o = l1_data[latched_index][31:0];
+                    2'b01: wb_dat_o = l1_data[latched_index][63:32];
+                    2'b10: wb_dat_o = l1_data[latched_index][95:64];
+                    2'b11: wb_dat_o = l1_data[latched_index][127:96];
+                endcase
             end
             
             default: begin
@@ -400,9 +470,9 @@ module dcache (
             // Bypass operation complete
             mem_resp_data_o = wb_dat_i;
             mem_req_ready_o = 1'b1;
-        end else if (state == WRITE_THROUGH && wb_ack_i) begin
-            // Write-through complete - acknowledge write
-            mem_resp_data_o = 32'h0;  // Write response doesn't need data
+        end else if (state == IDLE && mem_req_valid_i && l1_hit && mem_req_we_i) begin
+            // Write hit - immediate completion (L1 updated in FF)
+            mem_resp_data_o = 32'h0;
             mem_req_ready_o = 1'b1;
         end
     end
