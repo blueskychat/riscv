@@ -22,6 +22,10 @@ module if_stage (
     // Inputs for early branch resolution from ID stage
     input  wire logic        branch_redirect_id,
     input  wire logic [31:0] branch_target_id,
+    
+    // FENCE.I ICache invalidate
+    input  wire logic        icache_invalidate,
+    
     output logic        stall_req,
     // Wishbone master interface (Connected to ICACHE now)
     output logic [31:0] wb_adr_o,
@@ -144,6 +148,7 @@ module if_stage (
         // CPU Interface
         .pc_i           (pc),
         .fetch_en_i     (!rst), // Always request if not in reset
+        .invalidate_i   (icache_invalidate),  // FENCE.I invalidate
         .inst_o         (icache_inst),
         .ready_o        (icache_ready),
         

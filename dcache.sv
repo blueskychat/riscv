@@ -29,6 +29,10 @@ module dcache (
 
     output logic [31:0] mem_resp_data_o,
     output logic        mem_req_ready_o,
+    
+    // FENCE.I Cache Flush Interface
+    input  logic        flush_req_i,      // Request DCache flush (all dirty lines writeback)
+    output logic        flush_done_o,     // Flush operation complete
 
     // Wishbone Master Interface
     output logic [31:0] wb_adr_o,
@@ -237,7 +241,7 @@ module dcache (
     // ========================================================================
     // FSM States
     // ========================================================================
-    typedef enum logic [2:0] {
+    typedef enum logic [3:0] {
         IDLE,
         REFILL,         // Legacy: Direct L1 refill from memory (Phase 1-3)
         BYPASS_OP,      // Bypass operation (non-cacheable)
@@ -245,7 +249,9 @@ module dcache (
         L2_LOOKUP,      // Phase 4-5: Wait for L2 BRAM read (1 cycle)
         L2_REFILL,      // Phase 4-5: Fetch from memory to fill L2 (4 beats)
         L2_WRITEBACK,   // Phase 5: Write dirty L2 victim to memory (4 beats)
-        L1_VICTIM_WB    // Phase 5: Write L1 victim dirty data to L2 before L2 eviction
+        L1_VICTIM_WB,   // Phase 5: Write L1 victim dirty data to L2 before L2 eviction
+        FLUSH_SCAN,     // FENCE.I: Scan L1 for dirty entries
+        FLUSH_WB        // FENCE.I: Writeback dirty L1 entry to memory (4 beats)
     } state_t;
     
     state_t state, next_state;
@@ -269,6 +275,12 @@ module dcache (
     logic [L1_TAG_WIDTH-1:0] old_tag;
     logic                    is_dirty_eviction;
     
+    // FENCE.I Flush state
+    logic [L1_INDEX_WIDTH-1:0] flush_idx;        // Current L1 set being scanned
+    logic [127:0]              flush_wb_data;    // Data to writeback during flush
+    logic [L1_TAG_WIDTH-1:0]   flush_wb_tag;     // Tag for flush writeback address
+    logic                      flush_in_progress;// Flush operation is active
+    
     // Refill address - use latched address for multi-cycle safety
     // CRITICAL: Must use latched_addr, not mem_req_addr_i, because CPU may
     // change the address during multi-cycle REFILL operation
@@ -276,6 +288,9 @@ module dcache (
     
     // Writeback address - use old tag and latched index
     wire [31:0] wb_evict_addr = {old_tag, latched_index, 4'b0000};
+    
+    // Flush writeback address - use flush_wb_tag and flush_idx
+    wire [31:0] flush_wb_addr = {flush_wb_tag, flush_idx, 4'b0000};
 
     // ========================================================================
     // Magic Address Handling (Simulation Only)
@@ -351,7 +366,10 @@ module dcache (
         
         case (state)
             IDLE: begin
-                if (mem_req_valid_i && !is_magic_addr) begin
+                // FENCE.I flush request has priority over normal operations
+                if (flush_req_i) begin
+                    next_state = FLUSH_SCAN;
+                end else if (mem_req_valid_i && !is_magic_addr) begin
                     if (is_cacheable) begin
                         if (l1_hit) begin
                             if (mem_req_we_i) begin
@@ -374,6 +392,36 @@ module dcache (
                     end else begin
                         // Non-cacheable access -> Bypass
                         next_state = BYPASS_OP;
+                    end
+                end
+            end
+            
+            FLUSH_SCAN: begin
+                // Scan L1 for dirty entries
+                // Check if current flush_idx is dirty
+                if (l1_valid[flush_idx] && l1_dirty[flush_idx]) begin
+                    // Dirty entry found, writeback to memory
+                    next_state = FLUSH_WB;
+                end else begin
+                    // Not dirty, advance to next set or finish
+                    if (flush_idx == L1_SETS - 1) begin
+                        // All sets scanned, flush complete
+                        next_state = IDLE;
+                    end
+                    // else: stay in FLUSH_SCAN, flush_idx will increment
+                end
+            end
+            
+            FLUSH_WB: begin
+                // Writeback dirty L1 entry to memory (4 beats)
+                if (wb_ack_i && refill_counter == 2'b11) begin
+                    // Writeback complete
+                    if (flush_idx == L1_SETS - 1) begin
+                        // All sets scanned, flush complete
+                        next_state = IDLE;
+                    end else begin
+                        // Continue scanning
+                        next_state = FLUSH_SCAN;
                     end
                 end
             end
@@ -452,12 +500,50 @@ module dcache (
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             refill_counter <= 2'b00;
-        end else if (state != REFILL && state != L2_REFILL && state != L2_WRITEBACK) begin
+        end else if (state != REFILL && state != L2_REFILL && state != L2_WRITEBACK && state != FLUSH_WB) begin
             refill_counter <= 2'b00;
-        end else if ((state == REFILL || state == L2_REFILL || state == L2_WRITEBACK) && wb_ack_i) begin
+        end else if ((state == REFILL || state == L2_REFILL || state == L2_WRITEBACK || state == FLUSH_WB) && wb_ack_i) begin
             refill_counter <= refill_counter + 2'b01;
         end
     end
+    
+    // ========================================================================
+    // FENCE.I Flush Index Counter and Data Latching
+    // ========================================================================
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            flush_idx <= '0;
+            flush_in_progress <= 1'b0;
+            flush_wb_data <= 128'h0;
+            flush_wb_tag <= '0;
+        end else begin
+            // Entering FLUSH_SCAN from IDLE
+            if (state == IDLE && next_state == FLUSH_SCAN) begin
+                flush_idx <= '0;
+                flush_in_progress <= 1'b1;
+            end
+            // In FLUSH_SCAN, advancing to next set if current is clean
+            else if (state == FLUSH_SCAN && next_state == FLUSH_SCAN) begin
+                flush_idx <= flush_idx + 1'b1;
+            end
+            // Entering FLUSH_WB - latch data and tag for writeback
+            else if (state == FLUSH_SCAN && next_state == FLUSH_WB) begin
+                flush_wb_data <= l1_data[flush_idx];
+                flush_wb_tag  <= l1_tag_array[flush_idx];
+            end
+            // After FLUSH_WB completes, advance to next set (in FLUSH_SCAN)
+            else if (state == FLUSH_WB && next_state == FLUSH_SCAN) begin
+                flush_idx <= flush_idx + 1'b1;
+            end
+            // Flush complete - return to IDLE
+            else if ((state == FLUSH_SCAN || state == FLUSH_WB) && next_state == IDLE) begin
+                flush_in_progress <= 1'b0;
+            end
+        end
+    end
+    
+    // Flush done output - asserted for one cycle when flush completes
+    assign flush_done_o = flush_in_progress && (state == FLUSH_SCAN || state == FLUSH_WB) && next_state == IDLE;
 
     // ========================================================================
     // Refill Data Accumulation
@@ -729,6 +815,10 @@ module dcache (
         end else if (state == L1_VICTIM_WB) begin
             // Phase 5: L1 victim writeback - invalidate L1 entry
             l1_valid[l1_victim_index] <= 1'b0;
+            
+        end else if (state == FLUSH_WB && wb_ack_i && refill_counter == 2'b11) begin
+            // FENCE.I: Flush writeback complete - mark L1 entry as clean
+            l1_dirty[flush_idx] <= 1'b0;
         end
     end
     
@@ -956,8 +1046,25 @@ module dcache (
                 endcase
             end
             
+            FLUSH_WB: begin
+                // FENCE.I: Write dirty L1 entry to memory (4 beats)
+                wb_adr_o = flush_wb_addr + {28'b0, refill_counter, 2'b00};
+                wb_we_o  = 1'b1;
+                wb_sel_o = 4'b1111;
+                wb_stb_o = 1'b1;
+                wb_cyc_o = 1'b1;
+                
+                // Select word to write from flushed L1 data
+                case (refill_counter)
+                    2'b00: wb_dat_o = flush_wb_data[31:0];
+                    2'b01: wb_dat_o = flush_wb_data[63:32];
+                    2'b10: wb_dat_o = flush_wb_data[95:64];
+                    2'b11: wb_dat_o = flush_wb_data[127:96];
+                endcase
+            end
+            
             default: begin
-                // IDLE, L1_TO_L2, L2_LOOKUP - no wishbone activity
+                // IDLE, L1_TO_L2, L2_LOOKUP, FLUSH_SCAN - no wishbone activity
             end
         endcase
     end

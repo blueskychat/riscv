@@ -32,6 +32,7 @@ typedef struct packed {
     branch_t     branch_type;
     logic        is_branch;
     logic        is_jump;
+    logic        is_fence_i;      // FENCE.I instruction flag
     logic [31:0] predicted_pc;
     logic        prediction_valid;
     logic        valid;

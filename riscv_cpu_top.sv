@@ -397,7 +397,74 @@ module riscv_cpu_top (
     logic mem_stall_req; // Stall request from MEM stage (DCACHE)
 
     assign inst_mem_wait = if_stall_req;
-    assign data_mem_wait = mem_stall_req;
+    assign data_mem_wait = mem_stall_req || fence_i_active;
+    
+    // ==================== FENCE.I Controller ====================
+    // When FENCE.I instruction reaches EX stage:
+    // 1. Flush DCache (writeback all dirty lines to memory)
+    // 2. Invalidate ICache (clear all valid bits)
+    // 3. Stall pipeline until complete
+    
+    typedef enum logic [1:0] {
+        FENCE_I_IDLE,
+        FENCE_I_FLUSH_DCACHE,
+        FENCE_I_INVALIDATE_ICACHE
+    } fence_i_state_t;
+    
+    fence_i_state_t fence_i_state, fence_i_next_state;
+    
+    logic dcache_flush_req;
+    logic dcache_flush_done;
+    logic icache_invalidate;
+    logic fence_i_active;
+    
+    // FENCE.I is active when in EX stage (id_ex_reg.is_fence_i && id_ex_reg.valid)
+    wire fence_i_in_ex = id_ex_reg.is_fence_i && id_ex_reg.valid;
+    
+    // FENCE.I state machine
+    always_ff @(posedge sys_clk or posedge sys_rst) begin
+        if (sys_rst) begin
+            fence_i_state <= FENCE_I_IDLE;
+        end else begin
+            fence_i_state <= fence_i_next_state;
+        end
+    end
+    
+    always_comb begin
+        fence_i_next_state = fence_i_state;
+        dcache_flush_req = 1'b0;
+        icache_invalidate = 1'b0;
+        fence_i_active = 1'b0;
+        
+        case (fence_i_state)
+            FENCE_I_IDLE: begin
+                if (fence_i_in_ex) begin
+                    // Start stalling immediately to prevent FENCE.I from advancing
+                    fence_i_active = 1'b1;
+                    // Also start flush request immediately
+                    dcache_flush_req = 1'b1;
+                    fence_i_next_state = FENCE_I_FLUSH_DCACHE;
+                end
+            end
+            
+            FENCE_I_FLUSH_DCACHE: begin
+                dcache_flush_req = 1'b1;
+                fence_i_active = 1'b1;
+                if (dcache_flush_done) begin
+                    fence_i_next_state = FENCE_I_INVALIDATE_ICACHE;
+                end
+            end
+            
+            FENCE_I_INVALIDATE_ICACHE: begin
+                icache_invalidate = 1'b1;
+                // Don't stall anymore - let pipeline proceed after this cycle
+                fence_i_active = 1'b0;
+                fence_i_next_state = FENCE_I_IDLE;
+            end
+            
+            default: fence_i_next_state = FENCE_I_IDLE;
+        endcase
+    end
     
     // ==================== 流水线寄存器 ====================
     
@@ -425,6 +492,7 @@ module riscv_cpu_top (
         .ex_is_branch   (id_ex_reg.is_branch),  //in
         .branch_redirect_id(branch_redirect_id),      //in
         .branch_target_id(branch_target_id),    //in
+        .icache_invalidate(icache_invalidate),  // FENCE.I invalidate
         .stall_req      (if_stall_req),         //out
         
         // Wishbone master interface
@@ -487,6 +555,9 @@ module riscv_cpu_top (
         .flush          (flush_mask[3]),
         .ex_mem_reg     (ex_mem_reg),
         .mem_wb_next    (mem_wb_next),
+        // FENCE.I DCache flush interface
+        .dcache_flush_req (dcache_flush_req),
+        .dcache_flush_done(dcache_flush_done),
         // Wishbone master interface
         .wb_adr_o       (wb_data_adr),
         .wb_dat_o       (wb_data_dat_o),

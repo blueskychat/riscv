@@ -7,6 +7,7 @@ module icache (
     // CPU Interface
     input  wire logic [31:0] pc_i,          // PC address from IF stage
     input  wire logic        fetch_en_i,    // Fetch enable,  =!rst  Always request if not in reset
+    input  wire logic        invalidate_i,  // FENCE.I: Invalidate all cache entries
     output logic [31:0]      inst_o,        // Instruction output
     output logic             ready_o,       // Data ready (cache hit or refill complete)
     
@@ -344,6 +345,16 @@ module icache (
                 for (s = 0; s < SETS; s = s + 1) begin
                     valid_array[w][s] <= 1'b0;
                     lru_array[w][s] <= 2'b00;
+                end
+            end
+        end else if (invalidate_i) begin
+            // FENCE.I: Invalidate all cache entries (L0 + L1)
+            for (i = 0; i < L0_SETS; i = i + 1) begin
+                l0_valid[i] <= 1'b0;
+            end
+            for (w = 0; w < WAYS; w = w + 1) begin
+                for (s = 0; s < SETS; s = s + 1) begin
+                    valid_array[w][s] <= 1'b0;
                 end
             end
         end else begin

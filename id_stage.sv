@@ -243,6 +243,20 @@ module id_stage (
                     endcase
                 end
                 
+                OP_FENCE: begin
+                    // FENCE and FENCE.I instructions
+                    id_ex_next.valid = 1'b1;
+                    id_ex_next.reg_write = 1'b0;  // No register write
+                    id_ex_next.mem_read = 1'b0;
+                    id_ex_next.mem_write = 1'b0;
+                    id_ex_next.alu_op = ALU_ADD;  // Dummy ALU op
+                    if (funct3 == 3'b001) begin
+                        // FENCE.I - trigger cache synchronization
+                        id_ex_next.is_fence_i = 1'b1;
+                    end
+                    // else: FENCE - treat as NOP (default is_fence_i = 0)
+                end
+                
                 default: begin
 
                     id_ex_next.valid = 1'b0;

@@ -23,6 +23,10 @@ module mem_stage (
     input  wire         wb_rty_i,
     input  wire         wb_err_i,
     
+    // FENCE.I DCache flush interface
+    input  wire logic   dcache_flush_req,
+    output logic        dcache_flush_done,
+    
     output logic        stall_req // Output for hazard unit
 );
 
@@ -142,7 +146,11 @@ module mem_stage (
         .mem_req_valid_i(cpu_mem_stb), 
         
         .mem_resp_data_o(cpu_mem_dat_i),
-        .mem_req_ready_o(cpu_mem_ack), 
+        .mem_req_ready_o(cpu_mem_ack),
+        
+        // FENCE.I Flush interface
+        .flush_req_i    (dcache_flush_req),
+        .flush_done_o   (dcache_flush_done),
 
         // Wishbone Master Interface
         .wb_adr_o       (wb_adr_o),
