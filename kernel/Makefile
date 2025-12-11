@@ -35,7 +35,7 @@ ifeq ($(EN_PAGING), y)
 	ASFLAGS += -DENABLE_PAGING
 endif
 
-override EN_FENCEI ?= n
+override EN_FENCEI ?= y
 ifeq ($(EN_FENCEI), y)
 	ASFLAGS += -DENABLE_FENCEI
 endif

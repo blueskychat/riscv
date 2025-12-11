@@ -131,6 +131,7 @@ UTEST_CRYPTONIGHT:
 
     li a2, 0
     li t0, 0
+    li t1, 0 //如果不加这个初始化重复运行结果会不一样
 .MAIN_LOOP:
     // calculate a valid addr from rand number
     and t0, s0, a4

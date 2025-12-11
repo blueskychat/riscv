@@ -76,4 +76,49 @@ module uart_model #(
     wait(rxd_data_ready == 0);
   end
 
+  // ============================================================================
+  // UART Input Simulation (File-based, non-blocking)
+  // Usage: Edit uart_input.txt during simulation to send characters
+  // ============================================================================
+  integer uart_fd;
+  integer uart_pos = 0;  // Current read position
+  integer c;
+  
+  initial begin
+    reg done;
+    #100000;  // Wait for system init (100us)
+    
+    // Polling loop: check file every 1ms simulation time
+    forever begin
+      #1000000;  // 1ms interval
+      
+      uart_fd = $fopen("uart_input.bin", "rb");
+      if (uart_fd != 0) begin
+        // Skip already-read characters
+        done = 0;
+        repeat(uart_pos) begin
+          if (!done) begin
+            c = $fgetc(uart_fd);
+            if (c == -1) done = 1;
+          end
+        end
+        
+        // Read new characters
+        done = 0;
+        while (!done) begin
+          c = $fgetc(uart_fd);
+          if (c == -1) begin
+            done = 1;  // EOF
+          end else begin
+            $display("[UART] Sending char: '%c' (0x%02x)", c[7:0], c[7:0]);
+            pc_send_byte(c[7:0]);
+            uart_pos = uart_pos + 1;
+          end
+        end
+        
+        $fclose(uart_fd);
+      end
+    end
+  end
+
 endmodule
