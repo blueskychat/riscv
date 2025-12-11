@@ -530,7 +530,7 @@ module riscv_cpu_top (
     logic [31:0] csr_rdata;
     
     // 特权指令信号
-    logic ex_ecall, ex_ebreak, ex_mret;
+    logic ex_ecall, ex_ebreak, ex_mret, ex_illegal;
     
     // CSR 模块输出
     logic [31:0] mtvec_out;
@@ -629,22 +629,51 @@ module riscv_cpu_top (
         // 特权指令信号
         .ex_ecall       (ex_ecall),
         .ex_ebreak      (ex_ebreak),
-        .ex_mret        (ex_mret)
+        .ex_mret        (ex_mret),
+        .ex_illegal     (ex_illegal)
     );
     
     // ==================== 异常/中断处理逻辑 ====================
     
-    // 异常信号产生 (来自 EX stage)
-    // 当 ecall 或 ebreak 被执行时触发异常
+    // ========== 异常信号 (来自 EX stage) ==========
+    // 同步异常: ecall, ebreak, illegal instruction
     logic exception_trigger;
-    assign exception_trigger = ex_ecall || ex_ebreak;
+    assign exception_trigger = ex_ecall || ex_ebreak || ex_illegal;
     
-    // 异常进入信号 - 只在没有流水线暂停时触发
-    assign trap_enter = exception_trigger && !mem_stall;
+    // ========== Timer 中断检测 ==========
+    // Timer 中断待处理条件:
+    // 1. mip.MTIP (timer_interrupt from CLINT)
+    // 2. mie.MTIE (timer interrupt enable)
+    // 3. mstatus.MIE (global interrupt enable)
+    logic timer_int_pending;
+    assign timer_int_pending = timer_interrupt && mie_mtie && mstatus_mie;
     
-    // 异常原因
+    // 中断触发条件:
+    // 1. 有中断待处理
+    // 2. 有有效指令可以被中断 (在指令边界)
+    // 3. 没有正在处理的异常 (异常优先于中断)
+    // 4. 没有流水线暂停
+    logic interrupt_trigger;
+    assign interrupt_trigger = timer_int_pending && 
+                              id_ex_reg.valid && 
+                              !exception_trigger && 
+                              !mem_stall;
+    
+    // ========== Trap 进入信号 ==========
+    // 异常或中断触发时进入 trap
+    assign trap_enter = (exception_trigger || interrupt_trigger) && !mem_stall;
+    
+    // ========== Trap 原因 ==========
+    // 中断: mcause[31] = 1, 低位为中断原因
+    // 异常: mcause[31] = 0, 低位为异常原因
     always_comb begin
-        if (ex_ecall) begin
+        if (interrupt_trigger) begin
+            // Timer 中断
+            trap_cause = INT_M_TIMER;  // 32'h80000007
+        end else if (ex_illegal) begin
+            // 非法指令异常
+            trap_cause = EX_ILLEGAL_INST;  // 32'd2
+        end else if (ex_ecall) begin
             // ecall 根据当前特权模式决定异常代码
             case (priv_mode)
                 PRIV_U:  trap_cause = EX_ECALL_U;   // User mode ecall
@@ -659,21 +688,39 @@ module riscv_cpu_top (
         end
     end
     
-    // 异常发生时的 PC (当前 EX 阶段的指令地址)
+    // 异常/中断发生时的 PC (当前 EX 阶段的指令地址)
     assign trap_pc = id_ex_reg.pc;
     
-    // 异常值 (mtval) - 对于 ecall/ebreak 为 0
+    // 异常值 (mtval) - 对于 ecall/ebreak/中断 为 0
     assign trap_val = 32'h0;
     
-    // 异常/mret 导致的 PC 重定向
+    // ========== 向量化中断支持 ==========
+    // mtvec[1:0] = MODE: 00=Direct, 01=Vectored
+    // Direct: 所有 trap 跳转到 mtvec.BASE
+    // Vectored: 中断跳转到 mtvec.BASE + 4*cause, 异常跳转到 mtvec.BASE
+    logic [31:0] trap_vector_addr;
+    logic [1:0] mtvec_mode;
+    assign mtvec_mode = mtvec_out[1:0];
+    
+    always_comb begin
+        if (interrupt_trigger && mtvec_mode == 2'b01) begin
+            // Vectored mode for interrupts: BASE + 4 * cause (低7位)
+            trap_vector_addr = {mtvec_out[31:2], 2'b00} + {25'b0, trap_cause[6:0], 2'b00};
+        end else begin
+            // Direct mode or exception: 跳转到 BASE
+            trap_vector_addr = {mtvec_out[31:2], 2'b00};
+        end
+    end
+    
+    // ========== 异常/mret PC 重定向 ==========
     logic exception_redirect;
     logic [31:0] exception_target;
     
     always_comb begin
         if (trap_enter) begin
-            // 异常进入: 跳转到 mtvec
+            // 异常/中断进入: 跳转到 trap vector
             exception_redirect = 1'b1;
-            exception_target = mtvec_out;
+            exception_target = trap_vector_addr;
         end else if (ex_mret && !mem_stall) begin
             // mret: 跳转回 mepc
             exception_redirect = 1'b1;

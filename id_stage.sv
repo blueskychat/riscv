@@ -307,9 +307,9 @@ module id_stage (
                 end
                 
                 default: begin
-
-                    id_ex_next.valid = 1'b0;
-
+                    // 非法指令 - 设置异常标志
+                    id_ex_next.valid = 1'b1;
+                    id_ex_next.is_illegal = 1'b1;
                 end
 
             endcase

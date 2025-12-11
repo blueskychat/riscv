@@ -161,7 +161,7 @@ module csr_regfile (
                     mstatus[MSTATUS_MPP_HI:MSTATUS_MPP_LO] <= csr_new_value[MSTATUS_MPP_HI:MSTATUS_MPP_LO];
                 end
                 CSR_MIE:      mie <= csr_new_value;
-                CSR_MTVEC:    mtvec <= {csr_new_value[31:2], 2'b00};  // 4字节对齐
+                CSR_MTVEC:    mtvec <= csr_new_value;  // 保留 MODE 位 (bits 0-1)
                 CSR_MSCRATCH: mscratch <= csr_new_value;
                 CSR_MEPC:     mepc <= {csr_new_value[31:2], 2'b00};   // 4字节对齐
                 CSR_MCAUSE:   mcause <= csr_new_value;

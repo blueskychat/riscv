@@ -43,6 +43,7 @@ typedef struct packed {
     logic        is_ecall;        // ecall 指令
     logic        is_ebreak;       // ebreak 指令
     logic        is_mret;         // mret 指令
+    logic        is_illegal;      // 非法指令
     logic        valid;
 } id_ex_reg_t;
 

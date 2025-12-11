@@ -31,7 +31,8 @@ module ex_stage (
     // 特权指令信号 (传递给顶层处理)
     output logic        ex_ecall,          // ecall 指令
     output logic        ex_ebreak,         // ebreak 指令
-    output logic        ex_mret            // mret 指令
+    output logic        ex_mret,           // mret 指令
+    output logic        ex_illegal         // 非法指令
 );
 
     // ALU输入选择（包含转发）
@@ -156,6 +157,7 @@ module ex_stage (
     assign ex_ecall = id_ex_reg.valid && id_ex_reg.is_ecall;
     assign ex_ebreak = id_ex_reg.valid && id_ex_reg.is_ebreak;
     assign ex_mret = id_ex_reg.valid && id_ex_reg.is_mret;
+    assign ex_illegal = id_ex_reg.valid && id_ex_reg.is_illegal;
     
     // ==================== 准备下一级流水线寄存器 ====================
     
