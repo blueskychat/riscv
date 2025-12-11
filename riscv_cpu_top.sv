@@ -580,12 +580,57 @@ module riscv_cpu_top (
         .ex_mret        (ex_mret)
     );
     
-    // CSR 寄存器模块
-    // 注意: trap_enter 在 Phase 2 异常处理中实现
-    assign trap_enter = 1'b0;  // Phase 1 暂不处理异常进入
-    assign trap_cause = 32'h0;
-    assign trap_pc = 32'h0;
+    // ==================== 异常/中断处理逻辑 ====================
+    
+    // 异常信号产生 (来自 EX stage)
+    // 当 ecall 或 ebreak 被执行时触发异常
+    logic exception_trigger;
+    assign exception_trigger = ex_ecall || ex_ebreak;
+    
+    // 异常进入信号 - 只在没有流水线暂停时触发
+    assign trap_enter = exception_trigger && !mem_stall;
+    
+    // 异常原因
+    always_comb begin
+        if (ex_ecall) begin
+            // ecall 根据当前特权模式决定异常代码
+            case (priv_mode)
+                PRIV_U:  trap_cause = EX_ECALL_U;   // User mode ecall
+                PRIV_S:  trap_cause = EX_ECALL_S;   // Supervisor mode ecall
+                PRIV_M:  trap_cause = EX_ECALL_M;   // Machine mode ecall
+                default: trap_cause = EX_ECALL_M;
+            endcase
+        end else if (ex_ebreak) begin
+            trap_cause = EX_BREAKPOINT;  // Breakpoint exception
+        end else begin
+            trap_cause = 32'h0;
+        end
+    end
+    
+    // 异常发生时的 PC (当前 EX 阶段的指令地址)
+    assign trap_pc = id_ex_reg.pc;
+    
+    // 异常值 (mtval) - 对于 ecall/ebreak 为 0
     assign trap_val = 32'h0;
+    
+    // 异常/mret 导致的 PC 重定向
+    logic exception_redirect;
+    logic [31:0] exception_target;
+    
+    always_comb begin
+        if (trap_enter) begin
+            // 异常进入: 跳转到 mtvec
+            exception_redirect = 1'b1;
+            exception_target = mtvec_out;
+        end else if (ex_mret && !mem_stall) begin
+            // mret: 跳转回 mepc
+            exception_redirect = 1'b1;
+            exception_target = mepc_out;
+        end else begin
+            exception_redirect = 1'b0;
+            exception_target = 32'h0;
+        end
+    end
     
     csr_regfile u_csr (
         .clk            (sys_clk),
@@ -603,7 +648,7 @@ module riscv_cpu_top (
         .mtvec_out      (mtvec_out),
         .mepc_out       (mepc_out),
         // mret 接口
-        .mret_exec      (ex_mret),
+        .mret_exec      (ex_mret && !mem_stall),
         // 中断输出
         .mie_mtie       (mie_mtie),
         .mstatus_mie    (mstatus_mie),
@@ -681,6 +726,11 @@ module riscv_cpu_top (
                 // Memory Stall: Freeze everything
                 if_id_reg <= if_id_reg;
                 pc <= pc;
+            end else if (exception_redirect) begin
+                // 异常/mret 重定向: 最高优先级 (仅次于 mem_stall)
+                // 冲刷 IF/ID，PC 跳转到 mtvec 或 mepc
+                if_id_reg <= '0;
+                pc <= exception_target;
             end else if (flush_mask[0]) begin  // 冲刷IF的优先级高过hazard_stall。
                 // Branch redirect or mispredict: Flush IF/ID, update PC to target
                 if_id_reg <= '0;
@@ -705,6 +755,9 @@ module riscv_cpu_top (
             if (mem_stall) begin
                 // Memory Stall: Freeze
                 id_ex_reg <= id_ex_reg;
+            end else if (exception_redirect) begin
+                // 异常/mret: 冲刷 ID/EX (ecall/ebreak/mret 在 EX 阶段检测到)
+                id_ex_reg <= '0;
             end else if (hazard_stall) begin
                 // Hazard Stall: Inject Bubble
                 id_ex_reg <= '0; 
