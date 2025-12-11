@@ -644,9 +644,14 @@ module riscv_cpu_top (
     // Timer 中断待处理条件:
     // 1. mip.MTIP (timer_interrupt from CLINT)
     // 2. mie.MTIE (timer interrupt enable)
-    // 3. mstatus.MIE (global interrupt enable)
+    // 3. 中断使能检查 (取决于当前特权级):
+    //    - 在 M-mode: 需要 mstatus.MIE = 1
+    //    - 在 U/S-mode: M-mode 中断总是使能 (不检查 mstatus.MIE)
+    logic mie_enabled;
+    assign mie_enabled = (priv_mode != PRIV_M) || mstatus_mie;
+    
     logic timer_int_pending;
-    assign timer_int_pending = timer_interrupt && mie_mtie && mstatus_mie;
+    assign timer_int_pending = timer_interrupt && mie_mtie && mie_enabled;
     
     // 中断触发条件:
     // 1. 有中断待处理

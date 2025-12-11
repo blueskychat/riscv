@@ -127,11 +127,7 @@ test4:
     # 清除测试标志
     li s1, 0
     
-    # 保存返回地址
-    la t0, after_ecall
-    csrw CSR_MEPC, t0
-    
-    # 触发 ecall
+    # 触发 ecall (hardware saves PC to mepc)
     ecall
     
 after_ecall:
@@ -164,8 +160,6 @@ test5:
     csrw CSR_MTVEC, t0
     
     li s1, 0
-    la t0, after_ebreak
-    csrw CSR_MEPC, t0
     
     ebreak
     
@@ -197,8 +191,6 @@ test6:
     csrw CSR_MTVEC, t0
     
     li s1, 0
-    la t0, after_illegal
-    csrw CSR_MEPC, t0
     
     # 这是一个非法指令
     .word 0xFFFFFFFF
@@ -370,11 +362,19 @@ loop:
 .align 4
 trap_handler_ecall:
     li s1, 1
+    # Skip ecall instruction (4 bytes)
+    csrr t0, CSR_MEPC
+    addi t0, t0, 4
+    csrw CSR_MEPC, t0
     mret
 
 .align 4
 trap_handler_ebreak:
     li s1, 1
+    # Skip ebreak instruction (4 bytes)
+    csrr t0, CSR_MEPC
+    addi t0, t0, 4
+    csrw CSR_MEPC, t0
     mret
 
 .align 4
