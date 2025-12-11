@@ -73,4 +73,62 @@ typedef enum logic [1:0] {
     MEM_WORD = 2'b10
 } mem_width_t;
 
+// ==================== CSR 定义 ====================
+
+// CSR 地址定义 (Machine Mode)
+parameter CSR_MSTATUS   = 12'h300;  // Machine Status
+parameter CSR_MIE       = 12'h304;  // Machine Interrupt Enable
+parameter CSR_MTVEC     = 12'h305;  // Machine Trap Vector
+parameter CSR_MSCRATCH  = 12'h340;  // Machine Scratch
+parameter CSR_MEPC      = 12'h341;  // Machine Exception PC
+parameter CSR_MCAUSE    = 12'h342;  // Machine Cause
+parameter CSR_MTVAL     = 12'h343;  // Machine Trap Value
+
+// PMP CSR 地址
+parameter CSR_PMPCFG0   = 12'h3A0;  // PMP Config 0
+parameter CSR_PMPADDR0  = 12'h3B0;  // PMP Address 0
+
+// CSR 操作类型
+typedef enum logic [2:0] {
+    CSR_OP_NONE  = 3'b000,  // 无CSR操作
+    CSR_OP_RW    = 3'b001,  // CSRRW: 读后写
+    CSR_OP_RS    = 3'b010,  // CSRRS: 读后置位
+    CSR_OP_RC    = 3'b011,  // CSRRC: 读后清位
+    CSR_OP_RWI   = 3'b101,  // CSRRWI: 立即数写
+    CSR_OP_RSI   = 3'b110,  // CSRRSI: 立即数置位
+    CSR_OP_RCI   = 3'b111   // CSRRCI: 立即数清位
+} csr_op_t;
+
+// 异常代码定义
+parameter EX_INST_MISALIGN    = 32'd0;   // 指令地址未对齐
+parameter EX_INST_FAULT       = 32'd1;   // 指令访问错误
+parameter EX_ILLEGAL_INST     = 32'd2;   // 非法指令
+parameter EX_BREAKPOINT       = 32'd3;   // 断点 (ebreak)
+parameter EX_LOAD_MISALIGN    = 32'd4;   // Load地址未对齐
+parameter EX_LOAD_FAULT       = 32'd5;   // Load访问错误
+parameter EX_STORE_MISALIGN   = 32'd6;   // Store地址未对齐
+parameter EX_STORE_FAULT      = 32'd7;   // Store访问错误
+parameter EX_ECALL_U          = 32'd8;   // 用户模式ecall
+parameter EX_ECALL_S          = 32'd9;   // 监管模式ecall
+parameter EX_ECALL_M          = 32'd11;  // 机器模式ecall
+
+// 中断代码定义 (最高位为1表示中断)
+parameter INT_M_SOFT          = 32'h80000003;  // 机器模式软中断
+parameter INT_M_TIMER         = 32'h80000007;  // 机器模式定时器中断
+parameter INT_M_EXT           = 32'h8000000B;  // 机器模式外部中断
+
+// mstatus 字段定义
+parameter MSTATUS_MIE_BIT     = 3;   // Machine Interrupt Enable
+parameter MSTATUS_MPIE_BIT    = 7;   // Machine Previous Interrupt Enable
+parameter MSTATUS_MPP_LO      = 11;  // Machine Previous Privilege (低位)
+parameter MSTATUS_MPP_HI      = 12;  // Machine Previous Privilege (高位)
+
+// mie 字段定义
+parameter MIE_MTIE_BIT        = 7;   // Machine Timer Interrupt Enable
+
+// 特权模式
+parameter PRIV_U = 2'b00;  // User mode
+parameter PRIV_S = 2'b01;  // Supervisor mode
+parameter PRIV_M = 2'b11;  // Machine mode
+
 `endif

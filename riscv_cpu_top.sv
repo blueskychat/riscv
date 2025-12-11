@@ -473,6 +473,30 @@ module riscv_cpu_top (
     ex_mem_reg_t ex_mem_reg, ex_mem_next;
     mem_wb_reg_t mem_wb_reg, mem_wb_next;
     
+    // ==================== CSR 信号 ====================
+    
+    // EX 阶段到 CSR 模块的接口
+    logic [11:0] csr_addr;
+    csr_op_t     csr_op;
+    logic [31:0] csr_wdata;
+    logic [31:0] csr_rdata;
+    
+    // 特权指令信号
+    logic ex_ecall, ex_ebreak, ex_mret;
+    
+    // CSR 模块输出
+    logic [31:0] mtvec_out;
+    logic [31:0] mepc_out;
+    logic        mie_mtie;
+    logic        mstatus_mie;
+    logic [1:0]  priv_mode;
+    
+    // 异常/中断处理信号 (Phase 2/4 使用)
+    logic        trap_enter;
+    logic [31:0] trap_cause;
+    logic [31:0] trap_pc;
+    logic [31:0] trap_val;
+    
     // ==================== 模块实例化 ====================
     
     // 取指令级
@@ -544,7 +568,46 @@ module riscv_cpu_top (
         .fwd_mem_rd     (mem_wb_reg.rd),
         // 分支结果
         .branch_mispredict  (branch_mispredict),//out
-        .correct_pc         (correct_pc)        //out
+        .correct_pc         (correct_pc),       //out
+        // CSR 接口
+        .csr_addr_o     (csr_addr),
+        .csr_op_o       (csr_op),
+        .csr_wdata_o    (csr_wdata),
+        .csr_rdata_i    (csr_rdata),
+        // 特权指令信号
+        .ex_ecall       (ex_ecall),
+        .ex_ebreak      (ex_ebreak),
+        .ex_mret        (ex_mret)
+    );
+    
+    // CSR 寄存器模块
+    // 注意: trap_enter 在 Phase 2 异常处理中实现
+    assign trap_enter = 1'b0;  // Phase 1 暂不处理异常进入
+    assign trap_cause = 32'h0;
+    assign trap_pc = 32'h0;
+    assign trap_val = 32'h0;
+    
+    csr_regfile u_csr (
+        .clk            (sys_clk),
+        .rst            (sys_rst),
+        // CSR 读写接口
+        .csr_addr       (csr_addr),
+        .csr_op         (csr_op),
+        .csr_wdata      (csr_wdata),
+        .csr_rdata      (csr_rdata),
+        // 异常/中断接口
+        .trap_enter     (trap_enter),
+        .trap_cause     (trap_cause),
+        .trap_pc        (trap_pc),
+        .trap_val       (trap_val),
+        .mtvec_out      (mtvec_out),
+        .mepc_out       (mepc_out),
+        // mret 接口
+        .mret_exec      (ex_mret),
+        // 中断输出
+        .mie_mtie       (mie_mtie),
+        .mstatus_mie    (mstatus_mie),
+        .priv_mode      (priv_mode)
     );
     
     // 访存级

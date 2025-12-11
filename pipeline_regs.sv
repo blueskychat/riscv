@@ -35,6 +35,14 @@ typedef struct packed {
     logic        is_fence_i;      // FENCE.I instruction flag
     logic [31:0] predicted_pc;
     logic        prediction_valid;
+    // CSR 相关字段
+    csr_op_t     csr_op;          // CSR 操作类型
+    logic [11:0] csr_addr;        // CSR 地址
+    logic        is_csr;          // 是否为 CSR 指令
+    // 特权指令标志
+    logic        is_ecall;        // ecall 指令
+    logic        is_ebreak;       // ebreak 指令
+    logic        is_mret;         // mret 指令
     logic        valid;
 } id_ex_reg_t;
 

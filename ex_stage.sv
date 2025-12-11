@@ -20,7 +20,18 @@ module ex_stage (
 
     // 分支结果
     output logic        branch_mispredict, // New output for misprediction
-    output logic [31:0] correct_pc // New output for correct PC on mispredict
+    output logic [31:0] correct_pc, // New output for correct PC on mispredict
+    
+    // CSR 接口
+    output logic [11:0] csr_addr_o,        // CSR 地址
+    output csr_op_t     csr_op_o,          // CSR 操作类型
+    output logic [31:0] csr_wdata_o,       // CSR 写数据
+    input  wire logic [31:0] csr_rdata_i,  // CSR 读数据
+    
+    // 特权指令信号 (传递给顶层处理)
+    output logic        ex_ecall,          // ecall 指令
+    output logic        ex_ebreak,         // ebreak 指令
+    output logic        ex_mret            // mret 指令
 );
 
     // ALU输入选择（包含转发）
@@ -111,8 +122,43 @@ module ex_stage (
             end
         end
     end
+    // ==================== CSR 接口逻辑 ====================
     
-    // 准备下一级流水线寄存器
+    // CSR 地址直接传递
+    assign csr_addr_o = id_ex_reg.csr_addr;
+    
+    // CSR 操作类型
+    always_comb begin
+        if (id_ex_reg.valid && id_ex_reg.is_csr)
+            csr_op_o = id_ex_reg.csr_op;
+        else
+            csr_op_o = CSR_OP_NONE;
+    end
+    
+    // CSR 写数据计算
+    // 对于 CSRRW/CSRRS/CSRRC: 使用 rs1_data (经过转发)
+    // 对于 CSRRWI/CSRRSI/CSRRCI: 使用 zimm (rs1字段作为5位立即数)
+    always_comb begin
+        case (id_ex_reg.csr_op)
+            CSR_OP_RWI, CSR_OP_RSI, CSR_OP_RCI: begin
+                // 立即数版本: 使用 rs1 字段作为 zimm
+                csr_wdata_o = {27'b0, id_ex_reg.rs1};
+            end
+            default: begin
+                // 寄存器版本: 使用 rs1_forwarded
+                csr_wdata_o = rs1_forwarded;
+            end
+        endcase
+    end
+    
+    // ==================== 特权指令信号 ====================
+    
+    assign ex_ecall = id_ex_reg.valid && id_ex_reg.is_ecall;
+    assign ex_ebreak = id_ex_reg.valid && id_ex_reg.is_ebreak;
+    assign ex_mret = id_ex_reg.valid && id_ex_reg.is_mret;
+    
+    // ==================== 准备下一级流水线寄存器 ====================
+    
     always_comb begin
         ex_mem_next = '0;
         
@@ -132,6 +178,10 @@ module ex_stage (
             // JAL/JALR指令保存PC+4
             if (id_ex_reg.is_jump)
                 ex_mem_next.alu_result = id_ex_reg.pc + 4;
+            
+            // CSR 指令: 将 CSR 读取值作为 ALU 结果写回寄存器
+            if (id_ex_reg.is_csr)
+                ex_mem_next.alu_result = csr_rdata_i;
         end
     end
 

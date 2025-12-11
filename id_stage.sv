@@ -257,6 +257,55 @@ module id_stage (
                     // else: FENCE - treat as NOP (default is_fence_i = 0)
                 end
                 
+                OP_SYSTEM: begin
+                    id_ex_next.valid = 1'b1;
+                    id_ex_next.alu_op = ALU_ADD;  // Default ALU op
+                    
+                    if (funct3 == 3'b000) begin
+                        // SYSTEM 指令 (ecall, ebreak, mret, etc.)
+                        case (inst[31:20])
+                            12'h000: begin
+                                // ECALL
+                                id_ex_next.is_ecall = 1'b1;
+                                id_ex_next.reg_write = 1'b0;
+                            end
+                            12'h001: begin
+                                // EBREAK
+                                id_ex_next.is_ebreak = 1'b1;
+                                id_ex_next.reg_write = 1'b0;
+                            end
+                            12'h302: begin
+                                // MRET
+                                id_ex_next.is_mret = 1'b1;
+                                id_ex_next.reg_write = 1'b0;
+                            end
+                            default: begin
+                                // 其他 SYSTEM 指令暂不支持
+                                id_ex_next.valid = 1'b0;
+                            end
+                        endcase
+                    end else begin
+                        // CSR 指令 (csrrw, csrrs, csrrc, csrrwi, csrrsi, csrrci)
+                        id_ex_next.is_csr = 1'b1;
+                        id_ex_next.csr_addr = inst[31:20];  // CSR 地址
+                        id_ex_next.reg_write = (rd != 5'b0);  // rd != 0 时写回CSR读取值
+                        
+                        // CSR 操作类型由 funct3 决定
+                        case (funct3)
+                            3'b001: id_ex_next.csr_op = CSR_OP_RW;   // CSRRW
+                            3'b010: id_ex_next.csr_op = CSR_OP_RS;   // CSRRS
+                            3'b011: id_ex_next.csr_op = CSR_OP_RC;   // CSRRC
+                            3'b101: id_ex_next.csr_op = CSR_OP_RWI;  // CSRRWI
+                            3'b110: id_ex_next.csr_op = CSR_OP_RSI;  // CSRRSI
+                            3'b111: id_ex_next.csr_op = CSR_OP_RCI;  // CSRRCI
+                            default: id_ex_next.csr_op = CSR_OP_NONE;
+                        endcase
+                        
+                        // 对于立即数版本 (funct3[2]=1), rs1 字段作为 zimm
+                        // imm 已经被正确设置为 I-type 立即数
+                    end
+                end
+                
                 default: begin
 
                     id_ex_next.valid = 1'b0;

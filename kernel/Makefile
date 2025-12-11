@@ -25,7 +25,7 @@ else
 	LDSCRIPT	:= kern/kernel64.ld
 endif
 
-override EN_INT ?= n
+override EN_INT ?= y
 ifeq ($(EN_INT), y)
 	ASFLAGS += -DENABLE_INT
 endif
