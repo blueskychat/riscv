@@ -23,6 +23,9 @@ module csr_regfile (
     // mret 接口
     input  wire logic        mret_exec,     // 执行 mret 指令
     
+    // 中断输入
+    input  wire logic        timer_interrupt, // Timer 中断信号
+    
     // 中断使能输出
     output logic             mie_mtie,      // Timer 中断使能
     output logic             mstatus_mie,   // 全局中断使能
@@ -30,7 +33,7 @@ module csr_regfile (
     // 当前特权模式
     output logic [1:0]       priv_mode,     // 当前特权级
     
-    // PMP 配置输出 (用于内存访问权限检查)
+    //PMP 配置输出 (用于内存访问权限检查)
     output logic [31:0]      pmpcfg0_out,   // PMP 配置寄存器 0
     output logic [31:0]      pmpaddr0_out   // PMP 地址寄存器 0
 );
@@ -45,6 +48,9 @@ module csr_regfile (
     logic [31:0] mepc;       // Machine Exception PC
     logic [31:0] mcause;     // Machine Cause
     logic [31:0] mtval;      // Machine Trap Value
+    
+    // mip (Machine Interrupt Pending) 由硬件设置
+    logic [31:0] mip;
     
     // PMP CSRs
     logic [31:0] pmpcfg0;    // PMP Config 0
@@ -67,6 +73,12 @@ module csr_regfile (
     
     // ==================== CSR 读取逻辑 ====================
     
+    // mip 由硬件设置：bit 7 = Timer interrupt pending
+    always_comb begin
+        mip = 32'h0;
+        mip[MIE_MTIE_BIT] = timer_interrupt;  // Timer 中断 pending 位
+    end
+    
     always_comb begin
         case (csr_addr)
             CSR_MSTATUS:   csr_rdata = mstatus;
@@ -76,6 +88,7 @@ module csr_regfile (
             CSR_MEPC:      csr_rdata = mepc;
             CSR_MCAUSE:    csr_rdata = mcause;
             CSR_MTVAL:     csr_rdata = mtval;
+            CSR_MIP:       csr_rdata = mip;
             CSR_PMPCFG0:   csr_rdata = pmpcfg0;
             CSR_PMPADDR0:  csr_rdata = pmpaddr0;
             default:       csr_rdata = 32'h0;

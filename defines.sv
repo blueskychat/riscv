@@ -83,6 +83,7 @@ parameter CSR_MSCRATCH  = 12'h340;  // Machine Scratch
 parameter CSR_MEPC      = 12'h341;  // Machine Exception PC
 parameter CSR_MCAUSE    = 12'h342;  // Machine Cause
 parameter CSR_MTVAL     = 12'h343;  // Machine Trap Value
+parameter CSR_MIP       = 12'h344;  // Machine Interrupt Pending
 
 // PMP CSR 地址
 parameter CSR_PMPCFG0   = 12'h3A0;  // PMP Config 0

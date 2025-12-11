@@ -163,19 +163,27 @@ module riscv_cpu_top (
     logic [3:0]  wb_slave2_sel;
     logic        wb_slave2_stb, wb_slave2_ack, wb_slave2_cyc, wb_slave2_rty, wb_slave2_err;
 
+    // Wishbone signals - wb_mux to CLINT
+    logic [31:0] wb_slave3_adr, wb_slave3_dat_o, wb_slave3_dat_i;
+    logic        wb_slave3_we;
+    logic [3:0]  wb_slave3_sel;
+    logic        wb_slave3_stb, wb_slave3_ack, wb_slave3_cyc, wb_slave3_rty, wb_slave3_err;
+
     // wb_inst and wb_data are connected to wishbone_master
     // wb_master_intf is connected to wb_mux
-    // wb_mux is connected to wb_slave0, wb_slave1, wb_slave2
+    // wb_mux is connected to wb_slave0, wb_slave1, wb_slave2, wb_slave3
     // wb_slave0 is connected to sram_controller_base
     // wb_slave1 is connected to sram_controller_ext
     // wb_slave2 is connected to uart_controller
+    // wb_slave3 is connected to CLINT
     // wishbone_master的作用是将wb_inst和wb_data的信号进行仲裁，然后将
     // 选中的信号输出到wb_out，wb_out连接到wb_mux的slave接口
-    // wb_mux的作用是将wb_out的信号分发到wb_slave0, wb_slave1, wb_slave2
-    // wb_slave0, wb_slave1, wb_slave2分别连接到sram_controller_base, sram_controller_ext, uart_controller
+    // wb_mux的作用是将wb_out的信号分发到wb_slave0, wb_slave1, wb_slave2, wb_slave3
+    // wb_slave0, wb_slave1, wb_slave2, wb_slave3分别连接到sram_controller_base, sram_controller_ext, uart_controller, CLINT
     // sram_controller_base连接到基地址为0x8000_0000的SRAM
     // sram_controller_ext连接到基地址为0x8040_0000的SRAM
     // uart_controller连接到基地址为0x1000_0000的UART
+    // CLINT连接到基地址为0x0200_0000
     
     /* ===========  Wishbone Master begin =========== */
     // Wishbone Master => Wishbone MUX (Slave)
@@ -229,7 +237,7 @@ module riscv_cpu_top (
     /* =========== Wishbone MUX begin =========== */
     // Wishbone MUX (Masters) => bus slaves
 
-    wb_mux_3 wb_mux (
+    wb_mux_4 wb_mux (
         .clk(sys_clk),
         .rst(sys_rst),
 
@@ -288,7 +296,22 @@ module riscv_cpu_top (
         .wb_slave2_err_i(wb_slave2_err),
         // Address range: 0x1000_0000 ~ 0x1000_FFFF
         .wbs2_addr    (32'h1000_0000),
-        .wbs2_addr_msk(32'hFFFF_0000)
+        .wbs2_addr_msk(32'hFFFF_0000),
+
+        // Slave 3 interface (to CLINT)
+        .wb_slave3_adr_o(wb_slave3_adr),
+        .wb_slave3_dat_o(wb_slave3_dat_o),
+        .wb_slave3_dat_i(wb_slave3_dat_i),
+        .wb_slave3_we_o(wb_slave3_we),
+        .wb_slave3_sel_o(wb_slave3_sel),
+        .wb_slave3_stb_o(wb_slave3_stb),
+        .wb_slave3_ack_i(wb_slave3_ack),
+        .wb_slave3_cyc_o(wb_slave3_cyc),
+        .wb_slave3_rty_i(wb_slave3_rty),
+        .wb_slave3_err_i(wb_slave3_err),
+        // Address range: 0x0200_0000 ~ 0x020F_FFFF
+        .wbs3_addr    (32'h0200_0000),
+        .wbs3_addr_msk(32'hFFF0_0000)
     );
 
     /* =========== Wishbone MUX end =========== */
@@ -369,6 +392,31 @@ module riscv_cpu_top (
         .uart_txd_o(txd),
         .uart_rxd_i(rxd)
     );
+
+    // CLINT (Core Local Interruptor) 模块
+    logic timer_interrupt;  // Timer 中断信号
+    
+    clint clint_inst (
+        .clk_i(sys_clk),
+        .rst_i(sys_rst),
+        
+        // Wishbone slave (from MUX)
+        .wb_adr_i(wb_slave3_adr),
+        .wb_dat_i(wb_slave3_dat_o),
+        .wb_dat_o(wb_slave3_dat_i),
+        .wb_we_i(wb_slave3_we),
+        .wb_sel_i(wb_slave3_sel),
+        .wb_stb_i(wb_slave3_stb),
+        .wb_ack_o(wb_slave3_ack),
+        .wb_cyc_i(wb_slave3_cyc),
+        
+        // Timer interrupt output
+        .timer_interrupt(timer_interrupt)
+    );
+    
+    // CLINT 不支持 retry 和 error 信号
+    assign wb_slave3_rty = 1'b0;
+    assign wb_slave3_err = 1'b0;
 
     /* =========== Wishbone Slaves end =========== */
 
@@ -653,6 +701,8 @@ module riscv_cpu_top (
         .mepc_out       (mepc_out),
         // mret 接口
         .mret_exec      (ex_mret && !mem_stall),
+        // 中断输入
+        .timer_interrupt(timer_interrupt),
         // 中断输出
         .mie_mtie       (mie_mtie),
         .mstatus_mie    (mstatus_mie),
