@@ -491,6 +491,10 @@ module riscv_cpu_top (
     logic        mstatus_mie;
     logic [1:0]  priv_mode;
     
+    // PMP 配置输出
+    logic [31:0] pmpcfg0_out;
+    logic [31:0] pmpaddr0_out;
+    
     // 异常/中断处理信号 (Phase 2/4 使用)
     logic        trap_enter;
     logic [31:0] trap_cause;
@@ -652,7 +656,10 @@ module riscv_cpu_top (
         // 中断输出
         .mie_mtie       (mie_mtie),
         .mstatus_mie    (mstatus_mie),
-        .priv_mode      (priv_mode)
+        .priv_mode      (priv_mode),
+        // PMP 输出
+        .pmpcfg0_out    (pmpcfg0_out),
+        .pmpaddr0_out   (pmpaddr0_out)
     );
     
     // 访存级

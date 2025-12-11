@@ -28,7 +28,11 @@ module csr_regfile (
     output logic             mstatus_mie,   // 全局中断使能
     
     // 当前特权模式
-    output logic [1:0]       priv_mode      // 当前特权级
+    output logic [1:0]       priv_mode,     // 当前特权级
+    
+    // PMP 配置输出 (用于内存访问权限检查)
+    output logic [31:0]      pmpcfg0_out,   // PMP 配置寄存器 0
+    output logic [31:0]      pmpaddr0_out   // PMP 地址寄存器 0
 );
 
     // ==================== CSR 寄存器 ====================
@@ -56,6 +60,10 @@ module csr_regfile (
     assign mie_mtie = mie[MIE_MTIE_BIT];
     assign mstatus_mie = mstatus[MSTATUS_MIE_BIT];
     assign priv_mode = current_priv;
+    
+    // PMP 输出
+    assign pmpcfg0_out = pmpcfg0;
+    assign pmpaddr0_out = pmpaddr0;
     
     // ==================== CSR 读取逻辑 ====================
     
