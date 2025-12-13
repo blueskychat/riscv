@@ -89,6 +89,9 @@ parameter CSR_MIP       = 12'h344;  // Machine Interrupt Pending
 parameter CSR_PMPCFG0   = 12'h3A0;  // PMP Config 0
 parameter CSR_PMPADDR0  = 12'h3B0;  // PMP Address 0
 
+// Supervisor CSR 地址 (用于分页)
+parameter CSR_SATP      = 12'h180;  // Supervisor Address Translation and Protection
+
 // CSR 操作类型
 typedef enum logic [2:0] {
     CSR_OP_NONE  = 3'b000,  // 无CSR操作

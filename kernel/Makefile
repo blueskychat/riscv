@@ -30,7 +30,7 @@ ifeq ($(EN_INT), y)
 	ASFLAGS += -DENABLE_INT
 endif
 
-override EN_PAGING ?= n
+override EN_PAGING ?= y
 ifeq ($(EN_PAGING), y)
 	ASFLAGS += -DENABLE_PAGING
 endif

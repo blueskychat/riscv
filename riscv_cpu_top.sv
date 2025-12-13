@@ -543,6 +543,10 @@ module riscv_cpu_top (
     logic [31:0] pmpcfg0_out;
     logic [31:0] pmpaddr0_out;
     
+    // satp 输出 (用于分页, Phase 2+ 使用)
+    logic [31:0] satp_out;
+    logic        paging_enabled;
+    
     // 异常/中断处理信号 (Phase 2/4 使用)
     logic        trap_enter;
     logic [31:0] trap_cause;
@@ -761,7 +765,10 @@ module riscv_cpu_top (
         .priv_mode      (priv_mode),
         // PMP 输出
         .pmpcfg0_out    (pmpcfg0_out),
-        .pmpaddr0_out   (pmpaddr0_out)
+        .pmpaddr0_out   (pmpaddr0_out),
+        // satp 输出 (用于分页)
+        .satp_out       (satp_out),
+        .paging_enabled (paging_enabled)
     );
     
     // 访存级

@@ -35,7 +35,11 @@ module csr_regfile (
     
     //PMP 配置输出 (用于内存访问权限检查)
     output logic [31:0]      pmpcfg0_out,   // PMP 配置寄存器 0
-    output logic [31:0]      pmpaddr0_out   // PMP 地址寄存器 0
+    output logic [31:0]      pmpaddr0_out,  // PMP 地址寄存器 0
+    
+    // satp 输出 (用于分页)
+    output logic [31:0]      satp_out,      // satp 寄存器完整值
+    output logic             paging_enabled // 分页是否启用 (satp.MODE == 1)
 );
 
     // ==================== CSR 寄存器 ====================
@@ -56,6 +60,9 @@ module csr_regfile (
     logic [31:0] pmpcfg0;    // PMP Config 0
     logic [31:0] pmpaddr0;   // PMP Address 0
     
+    // Supervisor CSRs (用于分页)
+    logic [31:0] satp;       // Supervisor Address Translation and Protection
+    
     // 特权模式 (0=U, 3=M)
     logic [1:0] current_priv;
     
@@ -70,6 +77,10 @@ module csr_regfile (
     // PMP 输出
     assign pmpcfg0_out = pmpcfg0;
     assign pmpaddr0_out = pmpaddr0;
+    
+    // satp 输出
+    assign satp_out = satp;
+    assign paging_enabled = satp[31];  // Sv32: bit 31 = MODE (1 = 启用分页)
     
     // ==================== CSR 读取逻辑 ====================
     
@@ -91,6 +102,7 @@ module csr_regfile (
             CSR_MIP:       csr_rdata = mip;
             CSR_PMPCFG0:   csr_rdata = pmpcfg0;
             CSR_PMPADDR0:  csr_rdata = pmpaddr0;
+            CSR_SATP:      csr_rdata = satp;
             default:       csr_rdata = 32'h0;
         endcase
     end
@@ -122,6 +134,7 @@ module csr_regfile (
             mtval     <= 32'h0;
             pmpcfg0   <= 32'h0;
             pmpaddr0  <= 32'h0;
+            satp      <= 32'h0;  // 复位时分页关闭
             current_priv <= PRIV_M;  // 复位后进入 M 模式
             
         end else if (trap_enter) begin
@@ -168,6 +181,7 @@ module csr_regfile (
                 CSR_MTVAL:    mtval <= csr_new_value;
                 CSR_PMPCFG0:  pmpcfg0 <= csr_new_value;
                 CSR_PMPADDR0: pmpaddr0 <= csr_new_value;
+                CSR_SATP:     satp <= csr_new_value;
                 default: ;
             endcase
         end

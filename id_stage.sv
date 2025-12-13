@@ -280,8 +280,15 @@ module id_stage (
                                 id_ex_next.reg_write = 1'b0;
                             end
                             default: begin
-                                // 其他 SYSTEM 指令暂不支持
-                                id_ex_next.valid = 1'b0;
+                                // 检查是否为 SFENCE.VMA 指令
+                                // SFENCE.VMA: funct7 = 0001001 (7'h09)
+                                if (funct7 == 7'b0001001) begin
+                                    id_ex_next.is_sfence_vma = 1'b1;
+                                    id_ex_next.reg_write = 1'b0;
+                                end else begin
+                                    // 其他 SYSTEM 指令暂不支持
+                                    id_ex_next.valid = 1'b0;
+                                end
                             end
                         endcase
                     end else begin
