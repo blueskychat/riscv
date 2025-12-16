@@ -89,7 +89,7 @@ PAGE_TABLE_USER_STACK_3:
 	.global monitor_version
     // 启动时输出的信息
 monitor_version:
-    .asciz "MONITOR for RISC-V - initialized."
+    .asciz "M" //ONITOR for RISC-V - initialized."
     .p2align 2
     .word 0
 
