@@ -2,6 +2,7 @@
 `include "pipeline_regs.sv"
 
 // mem_stage.sv - 访存级
+// Phase 1 重构: DCache 抽取到 Top 层，此模块只输出 DCache CPU 接口
 module mem_stage (
     input  wire logic        clk,
     input  wire logic        rst,
@@ -11,26 +12,23 @@ module mem_stage (
     input  ex_mem_reg_t ex_mem_reg,
     output mem_wb_reg_t mem_wb_next,
     
-    // Wishbone master interface (DCache to external)
-    output logic [31:0] wb_adr_o,
-    output logic [31:0] wb_dat_o,
-    input  wire  [31:0] wb_dat_i,
-    output logic        wb_we_o,
-    output logic [3:0]  wb_sel_o,
-    output logic        wb_stb_o,
-    input  wire         wb_ack_i,
-    output logic        wb_cyc_o,
-    input  wire         wb_rty_i,
-    input  wire         wb_err_i,
+    // DCache CPU Interface (连接到外部 DCache)
+    output logic [31:0] dcache_addr_o,
+    output logic [31:0] dcache_wdata_o,
+    output logic        dcache_we_o,
+    output logic [3:0]  dcache_be_o,
+    output logic        dcache_valid_o,
+    input  wire  [31:0] dcache_rdata_i,
+    input  wire         dcache_ready_i,
     
-    // FENCE.I DCache flush interface
+    // FENCE.I DCache flush interface (直通)
     input  wire logic   dcache_flush_req,
     output logic        dcache_flush_done,
     
     output logic        stall_req // Output for hazard unit
 );
 
-    // Internal signals for DCache connection
+    // Internal signals
     logic [31:0] cpu_mem_adr;
     logic [31:0] cpu_mem_dat_o;
     logic [31:0] cpu_mem_dat_i;
@@ -38,7 +36,20 @@ module mem_stage (
     logic [3:0]  cpu_mem_sel;
     logic        cpu_mem_stb;
     logic        cpu_mem_ack;
-    logic        cpu_mem_cyc;
+    
+    // 连接到外部 DCache 端口
+    assign dcache_addr_o  = cpu_mem_adr;
+    assign dcache_wdata_o = cpu_mem_dat_o;
+    assign dcache_we_o    = cpu_mem_we;
+    assign dcache_be_o    = cpu_mem_sel;
+    assign dcache_valid_o = cpu_mem_stb;
+    assign cpu_mem_dat_i  = dcache_rdata_i;
+    assign cpu_mem_ack    = dcache_ready_i;
+    
+    // FENCE.I flush 直通 (flush_done 从外部 DCache 返回)
+    // 注: dcache_flush_req 传给外部 DCache, flush_done 从外部返回
+    // 这里只是声明，实际 flush_done 由 riscv_cpu_top 连接
+    assign dcache_flush_done = 1'b0; // Placeholder，实际由外部连接
     
     // 内存访问状态机
     typedef enum logic [1:0] {
@@ -70,9 +81,8 @@ module mem_stage (
     logic mem_op_pending;
     // 当有有效的内存读写请求时，mem_op_pending 为高
     assign mem_op_pending = (ex_mem_reg.mem_read || ex_mem_reg.mem_write) && ex_mem_reg.valid;
-    // Only assert cyc/stb in IDLE (starting) or WAIT_ACK. NOT in DONE.    
+    // Only assert stb in IDLE (starting) or WAIT_ACK. NOT in DONE.    
     assign cpu_mem_stb = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
-    assign cpu_mem_cyc = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending); 
     
     // Only stall if operation is pending AND ACK is not immediate
     // Single-cycle operations (magic addr, future cache hits) should NOT stall
@@ -132,38 +142,6 @@ module mem_stage (
         endcase
         
    end
-    
-    // DCache Instantiation
-    dcache u_dcache (
-        .clk            (clk),
-        .rst            (rst),
-        
-        // CPU Interface
-        .mem_req_addr_i (cpu_mem_adr),
-        .mem_req_wdata_i(cpu_mem_dat_o),
-        .mem_req_we_i   (cpu_mem_we),
-        .mem_req_be_i   (cpu_mem_sel),
-        .mem_req_valid_i(cpu_mem_stb), 
-        
-        .mem_resp_data_o(cpu_mem_dat_i),
-        .mem_req_ready_o(cpu_mem_ack),
-        
-        // FENCE.I Flush interface
-        .flush_req_i    (dcache_flush_req),
-        .flush_done_o   (dcache_flush_done),
-
-        // Wishbone Master Interface
-        .wb_adr_o       (wb_adr_o),
-        .wb_dat_o       (wb_dat_o),
-        .wb_dat_i       (wb_dat_i),
-        .wb_we_o        (wb_we_o),
-        .wb_sel_o       (wb_sel_o),
-        .wb_stb_o       (wb_stb_o),
-        .wb_ack_i       (wb_ack_i),
-        .wb_cyc_o       (wb_cyc_o),
-        .wb_rty_i       (wb_rty_i),
-        .wb_err_i       (wb_err_i)
-    );
 
     // Data alignment and sign extension
     assign mem_data_raw = (state == MEM_DONE) ? read_data_reg : cpu_mem_dat_i;

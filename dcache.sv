@@ -34,6 +34,12 @@ module dcache (
     input  logic        flush_req_i,      // Request DCache flush (all dirty lines writeback)
     output logic        flush_done_o,     // Flush operation complete
 
+    // PTW Interface (for MMU page table walk) - Phase 1: 空实现
+    input  logic [31:0] ptw_addr_i,       // PTW 请求地址
+    input  logic        ptw_req_i,        // PTW 请求有效
+    output logic [31:0] ptw_data_o,       // PTW 返回数据
+    output logic        ptw_ack_o,        // PTW 完成应答
+
     // Wishbone Master Interface
     output logic [31:0] wb_adr_o,
     output logic [31:0] wb_dat_o,
@@ -68,6 +74,13 @@ module dcache (
     localparam L2_INDEX_WIDTH = 9;      // log2(512)
     localparam L2_TAG_WIDTH = 19;       // 32 - 9 - 4
     localparam L2_WORD_OFFSET_WIDTH = 2;
+
+    // ========================================================================
+    // PTW Interface - Phase 1 空实现 (Phase 2 将实现实际仲裁逻辑)
+    // ========================================================================
+    // 暂时忽略 PTW 请求，始终返回无应答
+    assign ptw_data_o = 32'h0;
+    assign ptw_ack_o = 1'b0;
 
     // ========================================================================
     // Address Breakdown

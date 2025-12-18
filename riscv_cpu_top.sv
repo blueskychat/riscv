@@ -443,6 +443,15 @@ module riscv_cpu_top (
     logic data_mem_wait;
     logic if_stall_req; // Stall request from IF stage (ICACHE)
     logic mem_stall_req; // Stall request from MEM stage (DCACHE)
+    
+    // DCache CPU Interface signals (Phase 1: DCache 抽取到顶层)
+    logic [31:0] dcache_addr;
+    logic [31:0] dcache_wdata;
+    logic        dcache_we;
+    logic [3:0]  dcache_be;
+    logic        dcache_valid;
+    logic [31:0] dcache_rdata;
+    logic        dcache_ready;
 
     assign inst_mem_wait = if_stall_req;
     assign data_mem_wait = mem_stall_req || fence_i_active;
@@ -771,18 +780,53 @@ module riscv_cpu_top (
         .paging_enabled (paging_enabled)
     );
     
-    // 访存级
+    // 访存级 (Phase 1: DCache 接口抽取到顶层)
     mem_stage u_mem_stage (
         .clk            (sys_clk),
-        .rst           (sys_rst),
-        .stall          (mem_stall), // Connect stall signal
+        .rst            (sys_rst),
+        .stall          (mem_stall),
         .flush          (flush_mask[3]),
         .ex_mem_reg     (ex_mem_reg),
         .mem_wb_next    (mem_wb_next),
-        // FENCE.I DCache flush interface
+        // DCache CPU Interface (连接到顶层 DCache)
+        .dcache_addr_o  (dcache_addr),
+        .dcache_wdata_o (dcache_wdata),
+        .dcache_we_o    (dcache_we),
+        .dcache_be_o    (dcache_be),
+        .dcache_valid_o (dcache_valid),
+        .dcache_rdata_i (dcache_rdata),
+        .dcache_ready_i (dcache_ready),
+        // FENCE.I DCache flush interface (直通到 DCache)
         .dcache_flush_req (dcache_flush_req),
-        .dcache_flush_done(dcache_flush_done),
-        // Wishbone master interface
+        .dcache_flush_done(),  // 不连接，由 DCache 直接输出
+        .stall_req      (mem_stall_req)
+    );
+    
+    // DCache - 顶层实例化 (Phase 1)
+    dcache u_dcache (
+        .clk            (sys_clk),
+        .rst            (sys_rst),
+        
+        // CPU Interface (from mem_stage)
+        .mem_req_addr_i (dcache_addr),
+        .mem_req_wdata_i(dcache_wdata),
+        .mem_req_we_i   (dcache_we),
+        .mem_req_be_i   (dcache_be),
+        .mem_req_valid_i(dcache_valid),
+        .mem_resp_data_o(dcache_rdata),
+        .mem_req_ready_o(dcache_ready),
+        
+        // FENCE.I Flush interface
+        .flush_req_i    (dcache_flush_req),
+        .flush_done_o   (dcache_flush_done),
+        
+        // PTW Interface (Phase 1: 空连接，Phase 2 使用)
+        .ptw_addr_i     (32'h0),
+        .ptw_req_i      (1'b0),
+        .ptw_data_o     (),  // 未连接
+        .ptw_ack_o      (),  // 未连接
+        
+        // Wishbone Master Interface
         .wb_adr_o       (wb_data_adr),
         .wb_dat_o       (wb_data_dat_o),
         .wb_dat_i       (wb_data_dat_i),
@@ -792,8 +836,7 @@ module riscv_cpu_top (
         .wb_ack_i       (wb_data_ack),
         .wb_cyc_o       (wb_data_cyc),
         .wb_rty_i       (wb_data_rty),
-        .wb_err_i       (wb_data_err),
-        .stall_req      (mem_stall_req)
+        .wb_err_i       (wb_data_err)
     );
     
     // 写回级
