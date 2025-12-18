@@ -186,24 +186,18 @@ SHELL:
 #ifdef RV64
     li t0, CLINT_MTIME
     ld t1, 0(t0)        // 读取 mtime
-    li t3, 1000000000
-    add t3, t1, t3      // + 1000000000
+    li t3, 10000000
+    add t3, t1, t3      // + 10000000
     li t0, CLINT_MTIMECMP
     sd t3, 0(t0)        // 写入 mtimecmp
 #else
     li t0, CLINT_MTIME
     lw t1, 0(t0)        // 读取 mtime 低 32 位
     lw t2, 4(t0)        // 读取 mtime 高 32 位
-    
-    // 10亿 = 0x3B9A_CA00
-    // 低 32 位处理
-    li t3, 0x3B9ACA00   // 增量
-    add t3, t1, t3      // t3 = mtime_lo + inc
-    sltu t1, t3, t1     // 计算进位 (如果 结果 < 原值，则进位为1)
-    
-    // 高 32 位处理
-    add t2, t2, t1      // 加上进位 (增量的高32位是0)
-    
+    li t3, 10000000
+    add t3, t1, t3      // 低 32 位 + 10000000
+    sltu t1, t3, t1     // 生成进位，若进位 t1 = 1
+    add t2, t2, t1      // 高 32 位进位
     li t0, CLINT_MTIMECMP
     sw t2, 4(t0)        // 写入 mtimecmp 高 32 位
     sw t3, 0(t0)        // 写入 mtimecmp 低 32 位

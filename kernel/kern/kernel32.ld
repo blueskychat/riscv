@@ -29,4 +29,9 @@ SECTIONS
     .data : {
         *(.data)
     }
+    /* 虚拟地址测试程序段，映射到 VA 0x00000000 */
+    . = 0x80100000;
+    .text.vutest : {
+        *(.text.vutest)
+    }
 }

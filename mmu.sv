@@ -27,7 +27,12 @@ module mmu (
     output logic [31:0]      ptw_addr,          // Page Table Walk memory address
     output logic             ptw_req,           // PTW memory request
     input  wire logic [31:0] ptw_data,          // PTW memory response data
-    input  wire logic        ptw_ack            // PTW memory response valid
+    input  wire logic        ptw_ack,           // PTW memory response valid
+    
+    // SFENCE.VMA interface
+    input  wire logic        flush_all,         // Flush all TLB entries
+    input  wire logic        flush_vpn,         // Flush specific VPN
+    input  wire logic [19:0] flush_vpn_addr     // VPN to flush
 );
 
     // ==================== Sv32 格式定义 ====================
@@ -48,14 +53,15 @@ module mmu (
     //   [1]     R      - Readable
     //   [0]     V      - Valid
     
-    // PTE bits
-    localparam PTE_V = 0;
-    localparam PTE_R = 1;
-    localparam PTE_W = 2;
-    localparam PTE_X = 3;
-    localparam PTE_U = 4;
-    localparam PTE_A = 5;
-    localparam PTE_D = 6;
+    // PTE bits (RISC-V Sv32 standard)
+    localparam PTE_V = 0;  // Valid
+    localparam PTE_R = 1;  // Read
+    localparam PTE_W = 2;  // Write 
+    localparam PTE_X = 3;  // Execute
+    localparam PTE_U = 4;  // User
+    localparam PTE_G = 5;  // Global
+    localparam PTE_A = 6;  // Accessed
+    localparam PTE_D = 7;  // Dirty
     
     // Page fault codes
     localparam FAULT_INST_PAGE  = 4'd12;
@@ -63,13 +69,10 @@ module mmu (
     localparam FAULT_STORE_PAGE = 4'd15;
     
     // ==================== 状态机 ====================
-    typedef enum logic [2:0] {
+    typedef enum logic [1:0] {
         IDLE,
-        LEVEL1_REQ,     // Request 1st level PTE
         LEVEL1_WAIT,    // Wait for 1st level PTE response
-        LEVEL2_REQ,     // Request 2nd level PTE
         LEVEL2_WAIT,    // Wait for 2nd level PTE response
-        DONE,           // Translation complete
         FAULT           // Page fault
     } state_t;
     
@@ -79,8 +82,8 @@ module mmu (
     logic [31:0] saved_vaddr;       // Saved virtual address
     logic        saved_is_write;
     logic        saved_is_execute;
-    logic [31:0] pte_reg;           // Current PTE
-    logic [21:0] ppn_reg;           // Physical Page Number from PTE
+    logic [31:0] pte_reg;           // Current PTE (used for Level 2 address calculation)
+    wire [21:0] ppn = pte_reg[31:10];  // Physical Page Number from PTE
     
     // ==================== VPN 提取 ====================
     wire [9:0] vpn1 = saved_vaddr[31:22];  // Level 1 VPN
@@ -98,30 +101,31 @@ module mmu (
             saved_is_write <= 1'b0;
             saved_is_execute <= 1'b0;
             pte_reg <= 32'h0;
-            ppn_reg <= 22'h0;
+
         end else begin
             state <= next_state;
             
             case (state)
                 IDLE: begin
                     if (translate_req && paging_enabled) begin
-                        saved_vaddr <= vaddr;
-                        saved_is_write <= is_write;
-                        saved_is_execute <= is_execute;
+                        // TLB miss case: latch inputs for PTW
+                        if (!tlb_hit || !tlb_perm_ok) begin
+                            saved_vaddr <= vaddr;
+                            saved_is_write <= is_write;
+                            saved_is_execute <= is_execute;
+                        end
                     end
                 end
                 
                 LEVEL1_WAIT: begin
                     if (ptw_ack) begin
                         pte_reg <= ptw_data;
-                        ppn_reg <= ptw_data[31:10];
                     end
                 end
                 
                 LEVEL2_WAIT: begin
                     if (ptw_ack) begin
                         pte_reg <= ptw_data;
-                        ppn_reg <= ptw_data[31:10];
                     end
                 end
                 
@@ -130,44 +134,116 @@ module mmu (
         end
     end
     
-    // ==================== PTE 有效性和权限检查 ====================
-    logic pte_valid;
-    logic pte_is_leaf;
-    logic perm_ok;
+    // ==================== PTE 权限检查函数 ====================
+    // 参数化的权限检查，可以用于 pte_reg 或 ptw_data
+    function automatic logic check_pte_perm(
+        input logic [31:0] pte,
+        input logic [1:0]  priv,
+        input logic        is_wr,
+        input logic        is_exec
+    );
+        logic ok;
+        ok = 1'b1;
+        
+        // Check for illegal W=1, R=0 combination
+        if (pte[PTE_W] && !pte[PTE_R])
+            ok = 1'b0;
+        
+        // Check U bit (user mode access)
+        if (priv == PRIV_U && !pte[PTE_U])
+            ok = 1'b0;
+        
+        // Check read permission (Load)
+        if (!is_wr && !is_exec && !pte[PTE_R])
+            ok = 1'b0;
+        
+        // Check write permission (Store)
+        if (is_wr && !pte[PTE_W])
+            ok = 1'b0;
+        
+        // Check execute permission (Instruction fetch)
+        if (is_exec && !pte[PTE_X])
+            ok = 1'b0;
+        
+        // Check A bit (Accessed) - must be 1
+        if (!pte[PTE_A])
+            ok = 1'b0;
+        
+        // Check D bit (Dirty) - must be 1 for write
+        if (is_wr && !pte[PTE_D])
+            ok = 1'b0;
+        
+        return ok;
+    endfunction
     
+    // ==================== TLB Integration ====================
+    logic        tlb_hit;
+    logic [31:0] tlb_paddr;
+    logic [6:0]  tlb_perm;
+    logic        tlb_superpage;
+    logic        tlb_fill_req;
+    logic [21:0] tlb_fill_ppn;       // PPN for TLB fill (from ptw_data)
+    logic [6:0]  tlb_fill_perm;      // Permissions for TLB fill
+    logic        tlb_fill_superpage; // Superpage flag for TLB fill
+    logic        tlb_perm_ok;
+    
+    tlb #(
+        .ENTRIES(32)
+    ) u_tlb (
+        .clk(clk),
+        .rst(rst),
+        .vaddr_i(vaddr),
+        .lookup_req_i(translate_req && paging_enabled),
+        .hit_o(tlb_hit),
+        .paddr_o(tlb_paddr),
+        .perm_o(tlb_perm),
+        .is_superpage_o(tlb_superpage),
+        
+        .fill_req_i(tlb_fill_req),
+        .fill_vpn_i(saved_vaddr[31:12]),
+        .fill_ppn_i(tlb_fill_ppn),
+        .fill_perm_i(tlb_fill_perm),
+        .fill_superpage_i(tlb_fill_superpage),
+        
+        .flush_all_i(flush_all),
+        .flush_vpn_i(flush_vpn),
+        .flush_vpn_addr_i(flush_vpn_addr)
+    );
+    
+    // TLB Permission Check
     always_comb begin
-        // PTE 有效: V=1
-        pte_valid = pte_reg[PTE_V];
-        
-        // 叶子 PTE: R=1 或 X=1 (否则是指向下一级页表的指针)
-        pte_is_leaf = pte_reg[PTE_R] | pte_reg[PTE_X];
-        
-        // 权限检查
-        perm_ok = 1'b1;
-        
-        if (pte_valid && pte_is_leaf) begin
-            // 检查 U 位 (用户模式访问)
-            if (priv_mode == PRIV_U && !pte_reg[PTE_U]) begin
-                perm_ok = 1'b0;
-            end
+        tlb_perm_ok = 1'b1;
+        if (tlb_hit) begin
+            // Check for illegal W=1, R=0 combination (reserved in RISC-V spec)
+            if (tlb_perm[1] && !tlb_perm[0]) // W=1, R=0
+                tlb_perm_ok = 1'b0;
             
-            // 检查读权限 (Load)
-            if (!saved_is_write && !saved_is_execute && !pte_reg[PTE_R]) begin
-                perm_ok = 1'b0;
-            end
+            // Check User bit
+            if (priv_mode == PRIV_U && !tlb_perm[3]) // User bit is at index 3 in {D,A,G,U,X,W,R}
+                tlb_perm_ok = 1'b0;
             
-            // 检查写权限 (Store)
-            if (saved_is_write && !pte_reg[PTE_W]) begin
-                perm_ok = 1'b0;
-            end
+            // Check Read
+            if (!is_write && !is_execute && !tlb_perm[0]) // Read bit is at index 0
+                tlb_perm_ok = 1'b0;
+                
+            // Check Write
+            if (is_write && !tlb_perm[1]) // Write bit is at index 1
+                tlb_perm_ok = 1'b0;
+                
+            // Check Execute
+            if (is_execute && !tlb_perm[2]) // Execute bit is at index 2
+                tlb_perm_ok = 1'b0;
             
-            // 检查执行权限 (Instruction fetch)
-            if (saved_is_execute && !pte_reg[PTE_X]) begin
-                perm_ok = 1'b0;
-            end
+            // Check Accessed bit (must be 1)
+            if (!tlb_perm[5]) // A bit is at index 5
+                tlb_perm_ok = 1'b0;
+            
+            // Check Dirty bit for write access
+            if (is_write && !tlb_perm[6]) // D bit is at index 6
+                tlb_perm_ok = 1'b0;
         end
     end
-    
+
     // ==================== 状态机组合逻辑 ====================
     always_comb begin
         next_state = state;
@@ -177,6 +253,10 @@ module mmu (
         translate_done = 1'b0;
         page_fault = 1'b0;
         fault_type = 4'h0;
+        tlb_fill_req = 1'b0;
+        tlb_fill_ppn = 22'h0;
+        tlb_fill_perm = 7'h0;
+        tlb_fill_superpage = 1'b0;
         
         case (state)
             IDLE: begin
@@ -186,18 +266,27 @@ module mmu (
                         paddr = vaddr;
                         translate_done = 1'b1;
                     end else begin
-                        // 开始页表遍历
-                        next_state = LEVEL1_REQ;
+                        // Check TLB first (0-cycle hit)
+                        if (tlb_hit && tlb_perm_ok) begin
+                            paddr = tlb_paddr;
+                            translate_done = 1'b1;
+                        end else if (tlb_hit && !tlb_perm_ok) begin
+                            // TLB hit but permission violation -> Fault directly
+                            page_fault = 1'b1;
+                            translate_done = 1'b1;
+                             // Use input signals for fault type determination since we haven't latched them yet
+                            if (is_execute) fault_type = FAULT_INST_PAGE;
+                            else if (is_write) fault_type = FAULT_STORE_PAGE;
+                            else fault_type = FAULT_LOAD_PAGE;
+                        end else begin
+                            // TLB miss -> Start PTW (issue request immediately)
+                            // 使用 vaddr 直接计算，因为 saved_vaddr 还未锁存
+                            ptw_addr = {satp_ppn, 12'b0} + {20'b0, vaddr[31:22], 2'b0};
+                            ptw_req = 1'b1;
+                            next_state = LEVEL1_WAIT;
+                        end
                     end
                 end
-            end
-            
-            LEVEL1_REQ: begin
-                // 请求一级页表项
-                // PTE地址 = satp.PPN * 4096 + VPN[1] * 4
-                ptw_addr = {satp_ppn, 12'b0} + {20'b0, vpn1, 2'b0};
-                ptw_req = 1'b1;
-                next_state = LEVEL1_WAIT;
             end
             
             LEVEL1_WAIT: begin
@@ -207,25 +296,38 @@ module mmu (
                         next_state = FAULT;
                     end else if (ptw_data[PTE_R] | ptw_data[PTE_X]) begin
                         // 叶子 PTE (超级页, 4MB)
-                        // Sv32 超级页: VPN[0] 和 offset 合并
-                        next_state = DONE;
+                        // Sv32 规范: 超级页要求 PPN[9:0] == 0 (对齐检查)
+                        if (ptw_data[19:10] != 10'b0) begin
+                            // 超级页未对齐 -> page fault
+                            next_state = FAULT;
+                        end else if (!check_pte_perm(ptw_data, priv_mode, saved_is_write, saved_is_execute)) begin
+                            // 权限检查失败
+                            next_state = FAULT;
+                        end else begin
+                            // 超级页翻译成功，直接完成
+                            // 超级页 (4MB): PPN[21:10] | VPN[0] | offset
+                            paddr = {ptw_data[31:20], vpn0, page_offset};
+                            translate_done = 1'b1;
+                            // TLB fill with superpage data
+                            tlb_fill_req = 1'b1;
+                            tlb_fill_ppn = ptw_data[31:10];
+                            tlb_fill_perm = {ptw_data[PTE_D], ptw_data[PTE_A], ptw_data[PTE_G],
+                                             ptw_data[PTE_U], ptw_data[PTE_X], ptw_data[PTE_W], ptw_data[PTE_R]};
+                            tlb_fill_superpage = 1'b1;
+                            next_state = IDLE;
+                        end
                     end else begin
-                        // 指针 PTE, 继续二级遍历
-                        next_state = LEVEL2_REQ;
+                        // 指针 PTE, 立即发起二级页表请求
+                        // 使用 ptw_data[31:10] 直接计算，因为 pte_reg 还未更新
+                        ptw_addr = {ptw_data[31:10], 12'b0} + {20'b0, vpn0, 2'b0};
+                        ptw_req = 1'b1;
+                        next_state = LEVEL2_WAIT;
                     end
                 end else begin
                     // 继续等待
                     ptw_addr = {satp_ppn, 12'b0} + {20'b0, vpn1, 2'b0};
                     ptw_req = 1'b1;
                 end
-            end
-            
-            LEVEL2_REQ: begin
-                // 请求二级页表项
-                // PTE地址 = PTE.PPN * 4096 + VPN[0] * 4
-                ptw_addr = {ppn_reg, 12'b0} + {20'b0, vpn0, 2'b0};
-                ptw_req = 1'b1;
-                next_state = LEVEL2_WAIT;
             end
             
             LEVEL2_WAIT: begin
@@ -236,27 +338,26 @@ module mmu (
                     end else if (!(ptw_data[PTE_R] | ptw_data[PTE_X])) begin
                         // 二级 PTE 必须是叶子
                         next_state = FAULT;
+                    end else if (!check_pte_perm(ptw_data, priv_mode, saved_is_write, saved_is_execute)) begin
+                        // 权限检查失败
+                        next_state = FAULT;
                     end else begin
-                        // 有效叶子 PTE
-                        next_state = DONE;
+                        // 普通页翻译成功，直接完成
+                        // 普通页 (4KB): PPN | offset
+                        paddr = {ptw_data[31:10], page_offset};
+                        translate_done = 1'b1;
+                        // TLB fill with regular page data
+                        tlb_fill_req = 1'b1;
+                        tlb_fill_ppn = ptw_data[31:10];
+                        tlb_fill_perm = {ptw_data[PTE_D], ptw_data[PTE_A], ptw_data[PTE_G],
+                                         ptw_data[PTE_U], ptw_data[PTE_X], ptw_data[PTE_W], ptw_data[PTE_R]};
+                        tlb_fill_superpage = 1'b0;
+                        next_state = IDLE;
                     end
                 end else begin
                     // 继续等待
-                    ptw_addr = {ppn_reg, 12'b0} + {20'b0, vpn0, 2'b0};
+                    ptw_addr = {ppn, 12'b0} + {20'b0, vpn0, 2'b0};
                     ptw_req = 1'b1;
-                end
-            end
-            
-            DONE: begin
-                // 检查权限
-                if (!perm_ok) begin
-                    next_state = FAULT;
-                end else begin
-                    // 构造物理地址
-                    // paddr = PPN * 4096 + offset
-                    paddr = {ppn_reg, page_offset};
-                    translate_done = 1'b1;
-                    next_state = IDLE;
                 end
             end
             

@@ -72,8 +72,10 @@ kernel.bin: $(TARGET)
 kernel.asm: $(TARGET)
 	@$(GCCPREFIX)objdump -d -S $< > $@
 
+#show-utest: $(TARGET)
+#	@$(GCCPREFIX)objdump -D $< | grep "^[0-9a-f]\{8,16\} <UTEST_" | grep -n --color=auto 'UTEST_'
 show-utest: $(TARGET)
-	@$(GCCPREFIX)objdump -D $< | grep "^[0-9a-f]\{8,16\} <UTEST_" | grep -n --color=auto 'UTEST_'
+	@$(GCCPREFIX)objdump -D $< | grep -E "^[0-9a-f]{8,16} <V?UTEST_"
 
 sim: checkdirs $(TARGET)
 	$(QEMU) -M virt -m 32M -kernel $(TARGET) -nographic -monitor none -serial tcp::6666,server -s -bios none
