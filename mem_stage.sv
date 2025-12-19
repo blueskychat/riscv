@@ -37,14 +37,45 @@ module mem_stage (
     logic        cpu_mem_stb;
     logic        cpu_mem_ack;
     
-    // 连接到外部 DCache 端口
+    // ========================================================================
+    // Magic Address Handling (Simulation Only)
+    // ========================================================================
+    // Magic address range: 0x90000000~0x9FFFFFFF
+    // Used for simulation output ($write) - handled locally, not sent to DCache
+`ifdef SIMU
+    wire is_magic_addr = (ex_mem_reg.alu_result[31:28] == 4'h9);
+    
+    // Edge detection to print only once per request
+    logic magic_ack_prev;
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst)
+            magic_ack_prev <= 1'b0;
+        else
+            magic_ack_prev <= is_magic_addr && ex_mem_reg.mem_write && ex_mem_reg.valid;
+    end
+    
+    // Print character only on first cycle of magic write (rising edge)
+    always @(posedge clk) begin
+        if (is_magic_addr && ex_mem_reg.mem_write && ex_mem_reg.valid && !magic_ack_prev) begin
+            $write("%c", ex_mem_reg.rs2_data[7:0]);
+            $fflush();
+        end
+    end
+`else
+    wire is_magic_addr = 1'b0;
+`endif
+    
+    // Magic address provides immediate ACK, no DCache access needed
+    wire magic_ack = is_magic_addr && (ex_mem_reg.mem_read || ex_mem_reg.mem_write) && ex_mem_reg.valid;
+    
+    // 连接到外部 DCache 端口 (bypass magic addresses)
     assign dcache_addr_o  = cpu_mem_adr;
     assign dcache_wdata_o = cpu_mem_dat_o;
     assign dcache_we_o    = cpu_mem_we;
     assign dcache_be_o    = cpu_mem_sel;
-    assign dcache_valid_o = cpu_mem_stb;
+    assign dcache_valid_o = cpu_mem_stb && !is_magic_addr;  // Don't send magic addr to DCache
     assign cpu_mem_dat_i  = dcache_rdata_i;
-    assign cpu_mem_ack    = dcache_ready_i;
+    assign cpu_mem_ack    = dcache_ready_i || magic_ack;    // Magic addr gives immediate ACK
     
     // FENCE.I flush 直通 (flush_done 从外部 DCache 返回)
     // 注: dcache_flush_req 传给外部 DCache, flush_done 从外部返回
@@ -85,8 +116,9 @@ module mem_stage (
     assign cpu_mem_stb = (state == MEM_WAIT_ACK) || (state == MEM_IDLE && mem_op_pending);
     
     // Only stall if operation is pending AND ACK is not immediate
-    // Single-cycle operations (magic addr, future cache hits) should NOT stall
+    // Single-cycle operations (magic addr, cache hits) should NOT stall
     assign stall_req = mem_op_pending && !cpu_mem_ack && (state == MEM_IDLE || state == MEM_WAIT_ACK);
+
  
     always_comb begin
         next_state = state;

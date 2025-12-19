@@ -98,17 +98,9 @@ module dcache (
     // ========================================================================
     // Address Classification
     // ========================================================================
-`ifdef SIMU
-    wire is_magic_addr = (mem_req_addr_i[31:28] == 4'h9);
-`else
-    wire is_magic_addr = 1'b0;
-`endif
 
     // Cacheable range: 0x80000000~0x807fffff (8MB)
     wire is_cacheable = (mem_req_addr_i[31:23] == 9'b1000_0000_0);
-    
-    // Bypass: all other addresses (UART, etc.)
-    wire is_bypass = !is_magic_addr && !is_cacheable;
 
     // ========================================================================
     // L1 Cache Storage (LUTRAM - Distributed RAM)
@@ -305,35 +297,6 @@ module dcache (
     // Flush writeback address - use flush_wb_tag and flush_idx
     wire [31:0] flush_wb_addr = {flush_wb_tag, flush_idx, 4'b0000};
 
-    // ========================================================================
-    // Magic Address Handling (Simulation Only)
-    // ========================================================================
-`ifdef SIMU
-    wire magic_ack = is_magic_addr && mem_req_valid_i && (state == IDLE);
-    
-    // Edge detection to print only once per request
-    // Track previous magic_ack to detect rising edge
-    logic magic_ack_prev;
-    always_ff @(posedge clk or posedge rst) begin
-        if (rst)
-            magic_ack_prev <= 1'b0;
-        else
-            magic_ack_prev <= magic_ack && mem_req_we_i;
-    end
-    
-    // Print character only on first cycle of magic write (rising edge)
-    always @(posedge clk) begin
-        if (magic_ack && mem_req_we_i && !magic_ack_prev) begin
-            $write("%c", mem_req_wdata_i[7:0]);
-            $fflush();
-        end
-    end
-    
-    // Debug disabled for user testing
-    // Re-enable by uncommenting the always block below if needed
-`else
-    wire magic_ack = 1'b0;
-`endif
 
     // ========================================================================
     // FSM State Register
@@ -352,7 +315,7 @@ module dcache (
     // Latch on:
     // 1. Cache miss (read or write)
     // 2. Write hit (for write-through operation)
-    wire need_latch = mem_req_valid_i && !is_magic_addr && 
+    wire need_latch = mem_req_valid_i && 
                       (!l1_hit || (l1_hit && mem_req_we_i));
     
     always_ff @(posedge clk) begin
@@ -382,7 +345,7 @@ module dcache (
                 // FENCE.I flush request has priority over normal operations
                 if (flush_req_i) begin
                     next_state = FLUSH_SCAN;
-                end else if (mem_req_valid_i && !is_magic_addr) begin
+                end else if (mem_req_valid_i) begin
                     if (is_cacheable) begin
                         if (l1_hit) begin
                             if (mem_req_we_i) begin
@@ -1104,11 +1067,8 @@ module dcache (
         mem_resp_data_o = 32'h0;
         mem_req_ready_o = 1'b0;
         
-        if (is_magic_addr && mem_req_valid_i && state == IDLE) begin
-            // Magic address - immediate ACK
-            mem_resp_data_o = 32'h0;
-            mem_req_ready_o = 1'b1;
-        end else if (state == IDLE && mem_req_valid_i && l1_hit && !mem_req_we_i) begin
+       
+        if (state == IDLE && mem_req_valid_i && l1_hit && !mem_req_we_i) begin
             // L1 read hit - immediate response
             mem_resp_data_o = l1_hit_data;
             mem_req_ready_o = 1'b1;
