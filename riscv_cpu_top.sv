@@ -523,6 +523,50 @@ module riscv_cpu_top (
         endcase
     end
     
+    // ==================== SFENCE.VMA Controller ====================
+    // When SFENCE.VMA instruction reaches EX stage:
+    // 1. Flush IMMU TLB (for instruction translation)
+    // 2. Flush DMMU TLB (for data translation)
+    // 3. Support selective flush based on rs1 (VPN)
+    //
+    // SFENCE.VMA rs1, rs2 semantics:
+    // - rs1 = 0: Flush all TLB entries
+    // - rs1 ≠ 0: Flush entries matching VPN derived from rs1 address
+    // - rs2 is ASID (ignored in single address space mode)
+    
+    // TLB flush signals (directly connected to TLB modules when MMU is integrated)
+    logic        sfence_flush_all;
+    logic        sfence_flush_vpn;
+    logic [19:0] sfence_flush_vpn_addr;
+    logic        sfence_active;
+    
+    // SFENCE.VMA is active when in EX stage
+    wire sfence_vma_in_ex = id_ex_reg.is_sfence_vma && id_ex_reg.valid;
+    
+    // Generate TLB flush signals
+    // SFENCE.VMA completes in a single cycle (TLB flush is immediate)
+    always_comb begin
+        sfence_flush_all = 1'b0;
+        sfence_flush_vpn = 1'b0;
+        sfence_flush_vpn_addr = 20'h0;
+        sfence_active = 1'b0;
+        
+        if (sfence_vma_in_ex && !mem_stall) begin
+            sfence_active = 1'b1;
+            
+            // Check rs1: if rs1 = 0, flush all; otherwise flush specific VPN
+            if (id_ex_reg.rs1 == 5'b0) begin
+                // rs1 = x0: Flush all TLB entries
+                sfence_flush_all = 1'b1;
+            end else begin
+                // rs1 ≠ x0: Flush entry matching VPN from rs1 value
+                sfence_flush_vpn = 1'b1;
+                // VPN = vaddr[31:12], derived from rs1 data (sfence_vaddr)
+                sfence_flush_vpn_addr = sfence_vaddr[31:12];
+            end
+        end
+    end
+    
     // ==================== 流水线寄存器 ====================
     
     if_id_reg_t if_id_reg, if_id_next;
@@ -540,6 +584,10 @@ module riscv_cpu_top (
     
     // 特权指令信号
     logic ex_ecall, ex_ebreak, ex_mret, ex_illegal;
+    
+    // SFENCE.VMA 信号 (TLB 刷新)
+    logic        ex_sfence_vma;
+    logic [31:0] sfence_vaddr;
     
     // CSR 模块输出
     logic [31:0] mtvec_out;
@@ -643,7 +691,10 @@ module riscv_cpu_top (
         .ex_ecall       (ex_ecall),
         .ex_ebreak      (ex_ebreak),
         .ex_mret        (ex_mret),
-        .ex_illegal     (ex_illegal)
+        .ex_illegal     (ex_illegal),
+        // SFENCE.VMA 信号
+        .ex_sfence_vma  (ex_sfence_vma),
+        .sfence_vaddr_o (sfence_vaddr)
     );
     
     // ==================== 异常/中断处理逻辑 ====================

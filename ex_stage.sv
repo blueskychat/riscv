@@ -32,7 +32,11 @@ module ex_stage (
     output logic        ex_ecall,          // ecall 指令
     output logic        ex_ebreak,         // ebreak 指令
     output logic        ex_mret,           // mret 指令
-    output logic        ex_illegal         // 非法指令
+    output logic        ex_illegal,        // 非法指令
+    
+    // SFENCE.VMA 信号 (用于 TLB 刷新)
+    output logic        ex_sfence_vma,     // sfence.vma 指令
+    output logic [31:0] sfence_vaddr_o     // rs1 值 (用于选择性 VPN 刷新的虚拟地址)
 );
 
     // ALU输入选择（包含转发）
@@ -158,6 +162,11 @@ module ex_stage (
     assign ex_ebreak = id_ex_reg.valid && id_ex_reg.is_ebreak;
     assign ex_mret = id_ex_reg.valid && id_ex_reg.is_mret;
     assign ex_illegal = id_ex_reg.valid && id_ex_reg.is_illegal;
+    
+    // SFENCE.VMA: 刷新 TLB
+    // 当 rs1 = 0 时刷新所有条目，否则刷新匹配的 VPN
+    assign ex_sfence_vma = id_ex_reg.valid && id_ex_reg.is_sfence_vma;
+    assign sfence_vaddr_o = rs1_forwarded;  // rs1 包含要刷新的虚拟地址
     
     // ==================== 准备下一级流水线寄存器 ====================
     
