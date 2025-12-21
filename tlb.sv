@@ -52,11 +52,10 @@ module tlb #(
     logic [INDEX_WIDTH-1:0] hit_idx;
     
     // Parallel tag comparison
-    integer i;
     always_comb begin
         entry_match = '0;
         
-        for (i = 0; i < ENTRIES; i = i + 1) begin
+        for (int i = 0; i < ENTRIES; i = i + 1) begin
             if (valid[i]) begin
                 if (superpage[i]) begin
                     // Superpage: only compare VPN[1]
@@ -76,7 +75,7 @@ module tlb #(
         
         // Priority encoder - find first matching entry (lower index has priority)
         // Reverse iteration ensures last assignment wins, giving priority to lower indices
-        for (i = ENTRIES-1; i >= 0; i = i - 1) begin
+        for (int i = ENTRIES-1; i >= 0; i = i - 1) begin
             if (entry_match[i]) begin
                 hit_idx = i[INDEX_WIDTH-1:0];
             end

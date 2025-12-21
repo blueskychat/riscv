@@ -76,31 +76,60 @@ module dcache (
     localparam L2_WORD_OFFSET_WIDTH = 2;
 
     // ========================================================================
-    // PTW Interface - Phase 1 空实现 (Phase 2 将实现实际仲裁逻辑)
+    // Request Source Selection (for internal arbitration)
     // ========================================================================
-    // 暂时忽略 PTW 请求，始终返回无应答
-    assign ptw_data_o = 32'h0;
-    assign ptw_ack_o = 1'b0;
+    logic [31:0] current_req_addr;
+    logic        current_req_valid;
+    logic        current_req_we;
+    logic [3:0]  current_req_be;
+    logic [31:0] current_req_wdata;
+    logic        current_req_is_ptw;
+    
+    // Priority: CPU Memory Request > PTW Request
+    always_comb begin
+        if (mem_req_valid_i) begin
+            current_req_addr   = mem_req_addr_i;
+            current_req_wdata  = mem_req_wdata_i;
+            current_req_we     = mem_req_we_i;
+            current_req_be     = mem_req_be_i;
+            current_req_valid  = 1'b1;
+            current_req_is_ptw = 1'b0;
+        end else if (ptw_req_i) begin
+            current_req_addr   = ptw_addr_i;
+            current_req_wdata  = 32'h0;
+            current_req_we     = 1'b0;      // PTW is read-only
+            current_req_be     = 4'hF;      // PTW always reads full word
+            current_req_valid  = 1'b1;
+            current_req_is_ptw = 1'b1;
+        end else begin
+            current_req_addr   = 32'h0;
+            current_req_wdata  = 32'h0;
+            current_req_we     = 1'b0;
+            current_req_be     = 4'h0;
+            current_req_valid  = 1'b0;
+            current_req_is_ptw = 1'b0;
+        end
+    end
 
     // ========================================================================
     // Address Breakdown
     // ========================================================================
     // L1: [31:10] Tag (22 bits) | [9:4] Index (6 bits) | [3:2] Word (2 bits) | [1:0] Byte (2 bits)
-    wire [L1_TAG_WIDTH-1:0]        l1_tag   = mem_req_addr_i[31:10];
-    wire [L1_INDEX_WIDTH-1:0]      l1_index = mem_req_addr_i[9:4];
-    wire [L1_WORD_OFFSET_WIDTH-1:0] l1_word  = mem_req_addr_i[3:2];
+    wire [L1_TAG_WIDTH-1:0]        l1_tag   = current_req_addr[31:10];
+    wire [L1_INDEX_WIDTH-1:0]      l1_index = current_req_addr[9:4];
+    wire [L1_WORD_OFFSET_WIDTH-1:0] l1_word  = current_req_addr[3:2];
     
     // L2: [31:13] Tag (19 bits) | [12:4] Index (9 bits) | [3:2] Word (2 bits) | [1:0] Byte (2 bits)
-    wire [L2_TAG_WIDTH-1:0]        l2_tag   = mem_req_addr_i[31:13];
-    wire [L2_INDEX_WIDTH-1:0]      l2_index = mem_req_addr_i[12:4];
-    wire [L2_WORD_OFFSET_WIDTH-1:0] l2_word  = mem_req_addr_i[3:2];
+    wire [L2_TAG_WIDTH-1:0]        l2_tag   = current_req_addr[31:13];
+    wire [L2_INDEX_WIDTH-1:0]      l2_index = current_req_addr[12:4];
+    wire [L2_WORD_OFFSET_WIDTH-1:0] l2_word  = current_req_addr[3:2];
 
     // ========================================================================
     // Address Classification
     // ========================================================================
 
     // Cacheable range: 0x80000000~0x807fffff (8MB)
-    wire is_cacheable = (mem_req_addr_i[31:23] == 9'b1000_0000_0);
+    wire is_cacheable = (current_req_addr[31:23] == 9'b1000_0000_0);
 
     // ========================================================================
     // L1 Cache Storage (LUTRAM - Distributed RAM)
@@ -256,6 +285,7 @@ module dcache (
         L2_WRITEBACK,   // Phase 5: Write dirty L2 victim to memory (4 beats)
         L1_VICTIM_WB,   // Phase 5: Write L1 victim dirty data to L2 before L2 eviction
         FLUSH_SCAN,     // FENCE.I: Scan L1 for dirty entries
+        FLUSH_L2_WB,    // FENCE.I: Write dirty L1 data to L2 (1 cycle for L2 BRAM read)
         FLUSH_WB        // FENCE.I: Writeback dirty L1 entry to memory (4 beats)
     } state_t;
     
@@ -272,6 +302,7 @@ module dcache (
     logic [31:0] latched_wdata;
     logic        latched_we;
     logic [3:0]  latched_be;
+    logic        latched_is_ptw;
     logic [L1_INDEX_WIDTH-1:0] latched_index;
     logic [L1_TAG_WIDTH-1:0]   latched_tag;
     logic [L1_WORD_OFFSET_WIDTH-1:0] latched_word;
@@ -315,18 +346,19 @@ module dcache (
     // Latch on:
     // 1. Cache miss (read or write)
     // 2. Write hit (for write-through operation)
-    wire need_latch = mem_req_valid_i && 
-                      (!l1_hit || (l1_hit && mem_req_we_i));
+    wire need_latch = current_req_valid && 
+                      (!l1_hit || (l1_hit && current_req_we));
     
     always_ff @(posedge clk) begin
         if (state == IDLE && need_latch) begin
-            latched_addr  <= mem_req_addr_i;
-            latched_wdata <= mem_req_wdata_i;
-            latched_we    <= mem_req_we_i;
-            latched_be    <= mem_req_be_i;
-            latched_index <= l1_index;
-            latched_tag   <= l1_tag;
-            latched_word  <= l1_word;
+            latched_addr   <= current_req_addr;
+            latched_wdata  <= current_req_wdata;
+            latched_we     <= current_req_we;
+            latched_be     <= current_req_be;
+            latched_is_ptw <= current_req_is_ptw;
+            latched_index  <= l1_index;
+            latched_tag    <= l1_tag;
+            latched_word   <= l1_word;
             
             // Capture victim info for potential eviction
             old_tag       <= l1_tag_array[l1_index];
@@ -345,12 +377,12 @@ module dcache (
                 // FENCE.I flush request has priority over normal operations
                 if (flush_req_i) begin
                     next_state = FLUSH_SCAN;
-                end else if (mem_req_valid_i) begin
+                end else if (current_req_valid) begin
                     if (is_cacheable) begin
                         if (l1_hit) begin
-                            if (mem_req_we_i) begin
-                                // Write hit: Update L1 immediately (done in IDLE), set dirty
-                                // No state change needed, ready_o will be 1
+                            if (current_req_we) begin
+                                // Write hit: Update L1 immediately (done in IDLE), stay in IDLE
+                                // Single-cycle write using combinational signals
                                 next_state = IDLE; 
                             end else begin
                                 // Read hit: Return data immediately
@@ -358,11 +390,11 @@ module dcache (
                             end
                         end else begin
                             // L1 Miss (Read or Write)
-                            // Phase 5: Check for dirty eviction, write to L2 first
+                            // Only write dirty L1 data to L2 on eviction
                             if (l1_valid[l1_index] && l1_dirty[l1_index]) begin
                                 next_state = L1_TO_L2; // Write dirty L1 line to L2
                             end else begin
-                                next_state = L2_LOOKUP;  // Clean miss, check L2
+                                next_state = L2_LOOKUP;  // Clean or invalid, check L2 directly
                             end
                         end
                     end else begin
@@ -376,8 +408,9 @@ module dcache (
                 // Scan L1 for dirty entries
                 // Check if current flush_idx is dirty
                 if (l1_valid[flush_idx] && l1_dirty[flush_idx]) begin
-                    // Dirty entry found, writeback to memory
-                    next_state = FLUSH_WB;
+                    // Dirty entry found - first update L2, then writeback to memory
+                    // L2 BRAM read is initiated on this transition (see l2_bram_rd_en logic)
+                    next_state = FLUSH_L2_WB;
                 end else begin
                     // Not dirty, advance to next set or finish
                     if (flush_idx == L1_SETS - 1) begin
@@ -386,6 +419,12 @@ module dcache (
                     end
                     // else: stay in FLUSH_SCAN, flush_idx will increment
                 end
+            end
+            
+            FLUSH_L2_WB: begin
+                // Wait 1 cycle for L2 BRAM read, then write L1 data to L2 and proceed to FLUSH_WB
+                // L2 write happens in this state (see l2_bram_wr_en logic)
+                next_state = FLUSH_WB;
             end
             
             FLUSH_WB: begin
@@ -502,8 +541,8 @@ module dcache (
             else if (state == FLUSH_SCAN && next_state == FLUSH_SCAN) begin
                 flush_idx <= flush_idx + 1'b1;
             end
-            // Entering FLUSH_WB - latch data and tag for writeback
-            else if (state == FLUSH_SCAN && next_state == FLUSH_WB) begin
+            // Entering FLUSH_L2_WB - latch data and tag for L2 update and memory writeback
+            else if (state == FLUSH_SCAN && next_state == FLUSH_L2_WB) begin
                 flush_wb_data <= l1_data[flush_idx];
                 flush_wb_tag  <= l1_tag_array[flush_idx];
             end
@@ -512,7 +551,7 @@ module dcache (
                 flush_idx <= flush_idx + 1'b1;
             end
             // Flush complete - return to IDLE
-            else if ((state == FLUSH_SCAN || state == FLUSH_WB) && next_state == IDLE) begin
+            else if ((state == FLUSH_SCAN || state == FLUSH_WB || state == FLUSH_L2_WB) && next_state == IDLE) begin
                 flush_in_progress <= 1'b0;
             end
         end
@@ -572,6 +611,13 @@ module dcache (
     logic [L2_INDEX_WIDTH-1:0] l2_bram_rd_addr;
     logic l2_bram_rd_en;
     
+    // Compute flush address L2 index (similar to evict_l2_idx)
+    // flush_l2_addr = {flush_wb_tag, flush_idx, 4'b0000} → L2_index = addr[12:4]
+    // CRITICAL: Use LIVE signals from L1 (not latched) since latch happens on same edge
+    wire [L1_TAG_WIDTH-1:0] flush_tag_live = l1_tag_array[flush_idx];
+    wire [L2_INDEX_WIDTH-1:0] flush_l2_idx = {flush_tag_live[L2_INDEX_WIDTH-L1_INDEX_WIDTH-1:0], flush_idx};
+    wire [L2_TAG_WIDTH-1:0]   flush_l2_tag = {flush_tag_live[L1_TAG_WIDTH-1:L2_INDEX_WIDTH-L1_INDEX_WIDTH]};
+    
     // Compute the read address based on state transitions
     always_comb begin
         l2_bram_rd_addr = l2_index; // default
@@ -585,6 +631,10 @@ module dcache (
             l2_bram_rd_en = 1'b1;
         end else if (state == L1_TO_L2 && next_state == L2_LOOKUP) begin
             l2_bram_rd_addr = l2_index;
+            l2_bram_rd_en = 1'b1;
+        end else if (state == FLUSH_SCAN && next_state == FLUSH_L2_WB) begin
+            // Read L2 to find which way holds the flush line
+            l2_bram_rd_addr = flush_l2_idx;
             l2_bram_rd_en = 1'b1;
         end
     end
@@ -727,6 +777,7 @@ module dcache (
     integer i, j;
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
+            // Reset unpacked arrays with loop
             for (i = 0; i < L1_SETS; i = i + 1) begin
                 l1_valid[i] <= 1'b0;
                 l1_dirty[i] <= 1'b0;
@@ -783,8 +834,9 @@ module dcache (
             l1_tag_array[latched_index] <= latched_tag;
             l1_valid[latched_index]     <= 1'b1;
             
-        end else if (state == IDLE && mem_req_valid_i && l1_hit && mem_req_we_i) begin
-            // Write Hit: update L1 cache line immediately
+        end else if (state == IDLE && current_req_valid && l1_hit && current_req_we && !current_req_is_ptw) begin
+            // Write Hit: update L1 cache line immediately (CPU only, PTW is read-only)
+            // Single-cycle operation using combinational signals
             l1_data[l1_index] <= write_through_line;
             l1_dirty[l1_index] <= 1'b1; // Mark as dirty
             
@@ -794,6 +846,8 @@ module dcache (
             
         end else if (state == FLUSH_WB && wb_ack_i && refill_counter == 2'b11) begin
             // FENCE.I: Flush writeback complete - mark L1 entry as clean
+            // Keep L1 valid - subsequent accesses can still hit L1.
+            // L1/L2 consistency is now maintained by always writing L1 to L2 on eviction.
             l1_dirty[flush_idx] <= 1'b0;
         end
     end
@@ -839,6 +893,24 @@ module dcache (
         end
     end
     
+    // FLUSH_L2_WB: Find which L2 way holds the flush line
+    // Similar to l1_to_l2_found but uses flush_l2_tag (latched as flush_wb_tag)
+    logic [1:0] flush_l2_target_way;
+    logic flush_l2_way_found;
+    wire [L2_TAG_WIDTH-1:0] flush_l2_tag_latched = flush_wb_tag[L1_TAG_WIDTH-1:L2_INDEX_WIDTH-L1_INDEX_WIDTH];
+    wire [L2_INDEX_WIDTH-1:0] flush_l2_idx_latched = {flush_wb_tag[L2_INDEX_WIDTH-L1_INDEX_WIDTH-1:0], flush_idx};
+    
+    always_comb begin
+        flush_l2_way_found = 1'b0;
+        flush_l2_target_way = 2'b00;
+        for (int w = 0; w < L2_WAYS; w++) begin
+            if (l2_valid_read[w] && (l2_tag_read[w] == flush_l2_tag_latched)) begin
+                flush_l2_way_found = 1'b1;
+                flush_l2_target_way = w[1:0];
+            end
+        end
+    end
+    
     // L2 valid/dirty reset logic (separate from BRAM writes)
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -852,7 +924,9 @@ module dcache (
         end else if (state == L1_TO_L2) begin
             // Phase 5: Update valid/dirty/LRU for L1->L2 writeback
             if (l1_to_l2_found) begin
-                l2_dirty[l1_to_l2_target_way][evicted_l2_index] <= 1'b1;
+                // Only set L2 dirty if L1 was dirty (is_dirty_eviction is latched on L1 miss)
+                // If L1 was clean, L2 should remain clean to avoid spurious memory writebacks
+                l2_dirty[l1_to_l2_target_way][evicted_l2_index] <= is_dirty_eviction;
                 l2_lru[evicted_l2_index] <= update_lru(l2_lru[evicted_l2_index], l1_to_l2_target_way);
             end
         end else if (state == L2_LOOKUP && l2_hit) begin
@@ -868,6 +942,10 @@ module dcache (
             l2_valid[l2_victim_way][l2_lookup_index] <= 1'b1;
             l2_dirty[l2_victim_way][l2_lookup_index] <= 1'b0;
             l2_lru[l2_lookup_index] <= update_lru(l2_lru[l2_lookup_index], l2_victim_way);
+        end else if (state == FLUSH_L2_WB && flush_l2_way_found) begin
+            // FLUSH_L2_WB: Update L2 with dirty L1 data, set dirty=0 (will write to memory next)
+            l2_dirty[flush_l2_target_way][flush_l2_idx_latched] <= 1'b0;
+            l2_lru[flush_l2_idx_latched] <= update_lru(l2_lru[flush_l2_idx_latched], flush_l2_target_way);
         end
     end
     
@@ -910,12 +988,22 @@ module dcache (
             l2_bram_wr_tag_en = 1'b0;  // Don't update tag
         end else if (state == L2_REFILL && wb_ack_i && refill_counter == 2'b11) begin
             // L2 refill complete - write new line
+            // CRITICAL FIX: For write-allocate, use refill_line_merged (with write data merged)
+            // to ensure L1 and L2 have consistent data. Previously used raw refill data which
+            // would contain undefined values for uninitialized memory addresses.
             l2_bram_wr_en = 1'b1;
             l2_bram_wr_addr = l2_lookup_index;
-            l2_bram_wr_data = {wb_dat_i, refill_data[95:0]};
+            l2_bram_wr_data = latched_we ? refill_line_merged : {wb_dat_i, refill_data[95:0]};
             l2_bram_wr_way = get_lru_victim(l2_lru[l2_lookup_index]);
             l2_bram_wr_tag = l2_lookup_tag;
             l2_bram_wr_tag_en = 1'b1;  // Update tag
+        end else if (state == FLUSH_L2_WB && flush_l2_way_found) begin
+            // FLUSH_L2_WB: Update L2 with dirty L1 data before writing to memory
+            l2_bram_wr_en = 1'b1;
+            l2_bram_wr_addr = flush_l2_idx_latched;
+            l2_bram_wr_data = flush_wb_data;
+            l2_bram_wr_way = flush_l2_target_way;
+            l2_bram_wr_tag_en = 1'b0;  // Don't update tag (already correct)
         end
     end
     
@@ -1063,17 +1151,28 @@ module dcache (
     // ========================================================================
     // Output Mux
     // ========================================================================
+    // Internal combinational signals for PTW response
+    logic [31:0] ptw_data_comb;
+    logic        ptw_ack_comb;
+    
     always_comb begin
         mem_resp_data_o = 32'h0;
         mem_req_ready_o = 1'b0;
+        ptw_data_comb   = 32'h0;
+        ptw_ack_comb    = 1'b0;
         
-       
-        if (state == IDLE && mem_req_valid_i && l1_hit && !mem_req_we_i) begin
+        if (state == IDLE && current_req_valid && l1_hit && !current_req_we) begin
             // L1 read hit - immediate response
-            mem_resp_data_o = l1_hit_data;
-            mem_req_ready_o = 1'b1;
-        end else if (state == IDLE && mem_req_valid_i && l1_hit && mem_req_we_i) begin
+            if (current_req_is_ptw) begin
+                ptw_data_comb = l1_hit_data;
+                ptw_ack_comb  = 1'b1;
+            end else begin
+                mem_resp_data_o = l1_hit_data;
+                mem_req_ready_o = 1'b1;
+            end
+        end else if (state == IDLE && current_req_valid && l1_hit && current_req_we) begin
             // Write hit - immediate completion (L1 updated in FF)
+            // CPU only, PTW doesn't write
             mem_resp_data_o = 32'h0;
             mem_req_ready_o = 1'b1;
         end else if (state == L2_LOOKUP && l2_hit) begin
@@ -1085,20 +1184,56 @@ module dcache (
                 2'b10: l2_hit_word = l2_hit_data[95:64];
                 2'b11: l2_hit_word = l2_hit_data[127:96];
             endcase
-            mem_resp_data_o = l2_hit_word;
-            mem_req_ready_o = 1'b1;
+            if (latched_is_ptw) begin
+                ptw_data_comb = l2_hit_word;
+                ptw_ack_comb  = 1'b1;
+            end else begin
+                mem_resp_data_o = l2_hit_word;
+                mem_req_ready_o = 1'b1;
+            end
         end else if (state == L2_REFILL && wb_ack_i && refill_counter == 2'b11) begin
             // L2 Refill complete - return requested word
-            mem_resp_data_o = refill_word;
-            mem_req_ready_o = 1'b1;
+            if (latched_is_ptw) begin
+                ptw_data_comb = refill_word;
+                ptw_ack_comb  = 1'b1;
+            end else begin
+                mem_resp_data_o = refill_word;
+                mem_req_ready_o = 1'b1;
+            end
         end else if (state == REFILL && wb_ack_i && refill_counter == 2'b11) begin
             // Legacy REFILL complete - return requested word
-            mem_resp_data_o = refill_word;
-            mem_req_ready_o = 1'b1;
+            if (latched_is_ptw) begin
+                ptw_data_comb = refill_word;
+                ptw_ack_comb  = 1'b1;
+            end else begin
+                mem_resp_data_o = refill_word;
+                mem_req_ready_o = 1'b1;
+            end
         end else if (state == BYPASS_OP && wb_ack_i) begin
             // Bypass operation complete
-            mem_resp_data_o = wb_dat_i;
-            mem_req_ready_o = 1'b1;
+            if (latched_is_ptw) begin
+                ptw_data_comb = wb_dat_i;
+                ptw_ack_comb  = 1'b1;
+            end else begin
+                mem_resp_data_o = wb_dat_i;
+                mem_req_ready_o = 1'b1;
+            end
+        end
+    end
+    
+    // ========================================================================
+    // PTW Response Delay Register (1 cycle)
+    // ========================================================================
+    // This delay is CRITICAL for ptw_arbiter and MMU timing:
+    // - Allows ptw_arbiter state machine to update before ack arrives
+    // - Allows MMU to enter LEVEL1_WAIT/LEVEL2_WAIT before seeing ack
+    always_ff @(posedge clk or posedge rst) begin
+        if (rst) begin
+            ptw_data_o <= 32'h0;
+            ptw_ack_o  <= 1'b0;
+        end else begin
+            ptw_data_o <= ptw_data_comb;
+            ptw_ack_o  <= ptw_ack_comb;
         end
     end
 
