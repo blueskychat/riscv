@@ -92,6 +92,21 @@ parameter CSR_PMPADDR0  = 12'h3B0;  // PMP Address 0
 // Supervisor CSR 地址 (用于分页)
 parameter CSR_SATP      = 12'h180;  // Supervisor Address Translation and Protection
 
+// Supervisor CSR 地址 (用于 SRET)
+parameter CSR_SSTATUS   = 12'h100;  // Supervisor Status
+parameter CSR_SIE       = 12'h104;  // Supervisor Interrupt Enable
+parameter CSR_STVEC     = 12'h105;  // Supervisor Trap Vector
+parameter CSR_SSCRATCH  = 12'h140;  // Supervisor Scratch
+parameter CSR_SEPC      = 12'h141;  // Supervisor Exception PC
+parameter CSR_SCAUSE    = 12'h142;  // Supervisor Cause
+parameter CSR_STVAL     = 12'h143;  // Supervisor Trap Value
+parameter CSR_SIP       = 12'h144;  // Supervisor Interrupt Pending
+
+// sstatus 字段定义 (与 mstatus 类似但用于 S-mode)
+parameter SSTATUS_SIE_BIT  = 1;   // Supervisor Interrupt Enable
+parameter SSTATUS_SPIE_BIT = 5;   // Supervisor Previous Interrupt Enable
+parameter SSTATUS_SPP_BIT  = 8;   // Supervisor Previous Privilege (1 bit: 0=U, 1=S)
+
 // Zicntr 扩展: 用户模式只读时间计数器
 parameter CSR_TIME      = 12'hC01;  // time: mtime 低32位 (只读)
 parameter CSR_TIMEH     = 12'hC81;  // timeh: mtime 高32位 (只读, RV32)

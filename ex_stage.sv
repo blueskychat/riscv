@@ -32,6 +32,7 @@ module ex_stage (
     output logic        ex_ecall,          // ecall 指令
     output logic        ex_ebreak,         // ebreak 指令
     output logic        ex_mret,           // mret 指令
+    output logic        ex_sret,           // sret 指令 (S-mode return)
     output logic        ex_illegal,        // 非法指令
     
     // SFENCE.VMA 信号 (用于 TLB 刷新)
@@ -171,6 +172,7 @@ module ex_stage (
     assign ex_ecall = id_ex_reg.valid && id_ex_reg.is_ecall;
     assign ex_ebreak = id_ex_reg.valid && id_ex_reg.is_ebreak;
     assign ex_mret = id_ex_reg.valid && id_ex_reg.is_mret;
+    assign ex_sret = id_ex_reg.valid && id_ex_reg.is_sret;
     assign ex_illegal = id_ex_reg.valid && id_ex_reg.is_illegal;
     
     // SFENCE.VMA: 刷新 TLB

@@ -290,6 +290,17 @@ module id_stage (
                                 id_ex_next.is_mret = 1'b1;
                                 id_ex_next.reg_write = 1'b0;
                             end
+                            12'h102: begin
+                                // SRET (S-mode return)
+                                id_ex_next.is_sret = 1'b1;
+                                id_ex_next.reg_write = 1'b0;
+                            end
+                            12'h105: begin
+                                // WFI (Wait For Interrupt) - 实现为非法指令
+                                // 这样可以快速发现错误，而不是把 WFI 当成 NOP
+                                id_ex_next.is_illegal = 1'b1;
+                                id_ex_next.reg_write = 1'b0;
+                            end
                             default: begin
                                 // 检查是否为 SFENCE.VMA 指令
                                 // SFENCE.VMA: funct7 = 0001001 (7'h09)

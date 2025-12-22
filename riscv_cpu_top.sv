@@ -587,16 +587,16 @@ module riscv_cpu_top (
     logic [31:0] csr_rdata;
     
     // 特权指令信号
-    logic ex_ecall, ex_ebreak, ex_mret, ex_illegal;
+    logic ex_ecall, ex_ebreak, ex_mret, ex_sret, ex_illegal;
     logic ex_branch_misalign;  // 分支目标地址未对齐异常
     
     // SFENCE.VMA 信号 (TLB 刷新)
     logic        ex_sfence_vma;
     logic [31:0] sfence_vaddr;
     
-    // CSR 模块输出
     logic [31:0] mtvec_out;
     logic [31:0] mepc_out;
+    logic [31:0] sepc_out;     // SRET 返回地址
     logic        mie_mtie;
     logic        mstatus_mie;
     logic [1:0]  priv_mode;
@@ -716,7 +716,9 @@ module riscv_cpu_top (
         .ex_sfence_vma  (ex_sfence_vma),
         .sfence_vaddr_o (sfence_vaddr),
         // 分支目标地址未对齐信号
-        .ex_branch_misalign(ex_branch_misalign)
+        .ex_branch_misalign(ex_branch_misalign),
+        // SRET 信号
+        .ex_sret        (ex_sret)
     );
     
     // ==================== 异常/中断处理逻辑 ====================
@@ -844,6 +846,10 @@ module riscv_cpu_top (
             // mret: 跳转回 mepc
             exception_redirect = 1'b1;
             exception_target = mepc_out;
+        end else if (ex_sret && !mem_stall) begin
+            // sret: 跳转回 sepc
+            exception_redirect = 1'b1;
+            exception_target = sepc_out;
         end else begin
             exception_redirect = 1'b0;
             exception_target = 32'h0;
@@ -867,6 +873,7 @@ module riscv_cpu_top (
         .mepc_out       (mepc_out),
         // mret 接口
         .mret_exec      (ex_mret && !mem_stall),
+        .sret_exec      (ex_sret && !mem_stall),  // SRET 返回
         // 中断输入
         .timer_interrupt(timer_interrupt),
         .mtime_i        (mtime),           // Zicntr: time/timeh CSR
@@ -879,7 +886,9 @@ module riscv_cpu_top (
         .pmpaddr0_out   (pmpaddr0_out),
         // satp 输出 (用于分页)
         .satp_out       (satp_out),
-        .paging_enabled (paging_enabled)
+        .paging_enabled (paging_enabled),
+        // sepc 输出 (SRET)
+        .sepc_out       (sepc_out)
     );
     
     // ==================== MMU & PTW Signals ====================

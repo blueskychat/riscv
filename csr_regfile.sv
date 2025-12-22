@@ -22,6 +22,7 @@ module csr_regfile (
     
     // mret 接口
     input  wire logic        mret_exec,     // 执行 mret 指令
+    input  wire logic        sret_exec,     // 执行 sret 指令
     
     // 中断输入
     input  wire logic        timer_interrupt, // Timer 中断信号
@@ -40,7 +41,10 @@ module csr_regfile (
     
     // satp 输出 (用于分页)
     output logic [31:0]      satp_out,      // satp 寄存器完整值
-    output logic             paging_enabled // 分页是否启用 (satp.MODE == 1)
+    output logic             paging_enabled, // 分页是否启用 (satp.MODE == 1)
+    
+    // sepc 输出 (用于 SRET)
+    output logic [31:0]      sepc_out       // sepc 输出 (S-mode 异常返回地址)
 );
 
     // ==================== CSR 寄存器 ====================
@@ -61,8 +65,14 @@ module csr_regfile (
     logic [31:0] pmpcfg0;    // PMP Config 0
     logic [31:0] pmpaddr0;   // PMP Address 0
     
-    // Supervisor CSRs (用于分页)
+    // Supervisor CSRs (用于分页和 SRET)
     logic [31:0] satp;       // Supervisor Address Translation and Protection
+    logic [31:0] sstatus;    // Supervisor Status
+    logic [31:0] stvec;      // Supervisor Trap Vector
+    logic [31:0] sscratch;   // Supervisor Scratch
+    logic [31:0] sepc;       // Supervisor Exception PC
+    logic [31:0] scause;     // Supervisor Cause
+    logic [31:0] stval;      // Supervisor Trap Value
     
     // 特权模式 (0=U, 3=M)
     logic [1:0] current_priv;
@@ -82,6 +92,9 @@ module csr_regfile (
     // satp 输出
     assign satp_out = satp;
     assign paging_enabled = satp[31] && (current_priv != PRIV_M);  // Sv32: bit 31 = MODE (1 = 启用分页), disabled in M-mode
+    
+    // sepc 输出 (SRET)
+    assign sepc_out = sepc;
     
     // ==================== CSR 读取逻辑 ====================
     
@@ -104,6 +117,13 @@ module csr_regfile (
             CSR_PMPCFG0:   csr_rdata = pmpcfg0;
             CSR_PMPADDR0:  csr_rdata = pmpaddr0;
             CSR_SATP:      csr_rdata = satp;
+            // Supervisor CSRs
+            CSR_SSTATUS:   csr_rdata = sstatus;
+            CSR_STVEC:     csr_rdata = stvec;
+            CSR_SSCRATCH:  csr_rdata = sscratch;
+            CSR_SEPC:      csr_rdata = sepc;
+            CSR_SCAUSE:    csr_rdata = scause;
+            CSR_STVAL:     csr_rdata = stval;
             // Zicntr: time/timeh (read-only, mapped from mtime)
             CSR_TIME:      csr_rdata = mtime_i[31:0];
             CSR_TIMEH:     csr_rdata = mtime_i[63:32];
@@ -139,6 +159,13 @@ module csr_regfile (
             pmpcfg0   <= 32'h0;
             pmpaddr0  <= 32'h0;
             satp      <= 32'h0;  // 复位时分页关闭
+            // S-mode CSR 复位值
+            sstatus   <= 32'h0;
+            stvec     <= 32'h0;
+            sscratch  <= 32'h0;
+            sepc      <= 32'h0;
+            scause    <= 32'h0;
+            stval     <= 32'h0;
             current_priv <= PRIV_M;  // 复位后进入 M 模式
             
         end else if (trap_enter) begin
@@ -168,6 +195,17 @@ module csr_regfile (
             // 设置 MPP = U (如果支持 U 模式)
             mstatus[MSTATUS_MPP_HI:MSTATUS_MPP_LO] <= PRIV_U;
             
+        end else if (sret_exec) begin
+            // ========== sret 返回 (S-mode) ==========
+            // 恢复 SIE = SPIE
+            sstatus[SSTATUS_SIE_BIT] <= sstatus[SSTATUS_SPIE_BIT];
+            // 设置 SPIE = 1
+            sstatus[SSTATUS_SPIE_BIT] <= 1'b1;
+            // 恢复特权级 = SPP (1=S, 0=U)
+            current_priv <= {1'b0, sstatus[SSTATUS_SPP_BIT]};
+            // 设置 SPP = U
+            sstatus[SSTATUS_SPP_BIT] <= 1'b0;
+            
         end else if (csr_op != CSR_OP_NONE) begin
             // ========== 正常 CSR 写入 ==========
             case (csr_addr)
@@ -186,6 +224,17 @@ module csr_regfile (
                 CSR_PMPCFG0:  pmpcfg0 <= csr_new_value;
                 CSR_PMPADDR0: pmpaddr0 <= csr_new_value;
                 CSR_SATP:     satp <= csr_new_value;
+                // Supervisor CSRs
+                CSR_SSTATUS:  begin
+                    sstatus[SSTATUS_SIE_BIT]  <= csr_new_value[SSTATUS_SIE_BIT];
+                    sstatus[SSTATUS_SPIE_BIT] <= csr_new_value[SSTATUS_SPIE_BIT];
+                    sstatus[SSTATUS_SPP_BIT]  <= csr_new_value[SSTATUS_SPP_BIT];
+                end
+                CSR_STVEC:    stvec <= csr_new_value;
+                CSR_SSCRATCH: sscratch <= csr_new_value;
+                CSR_SEPC:     sepc <= {csr_new_value[31:2], 2'b00};  // 4字节对齐
+                CSR_SCAUSE:   scause <= csr_new_value;
+                CSR_STVAL:    stval <= csr_new_value;
                 default: ;
             endcase
         end
