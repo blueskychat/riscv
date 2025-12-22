@@ -658,3 +658,5 @@ vivado -mode batch -source synth.tcl
 现在你的 Magic Address 机制已经完美优化，**仿真时高效调试，综合时零开销**！🚀
 
 如果需要测试验证，随时告诉我！
+
+现在magicaddress的实现已经移到mem_stage.sv中。

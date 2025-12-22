@@ -89,6 +89,11 @@ parameter CSR_MIP       = 12'h344;  // Machine Interrupt Pending
 parameter CSR_PMPCFG0   = 12'h3A0;  // PMP Config 0
 parameter CSR_PMPADDR0  = 12'h3B0;  // PMP Address 0
 
+// Machine 模式额外 CSR
+parameter CSR_MHARTID   = 12'hF14;  // Hart ID (只读)
+parameter CSR_MEDELEG   = 12'h302;  // Machine Exception Delegation
+parameter CSR_MIDELEG   = 12'h303;  // Machine Interrupt Delegation
+
 // Supervisor CSR 地址 (用于分页)
 parameter CSR_SATP      = 12'h180;  // Supervisor Address Translation and Protection
 
@@ -150,7 +155,21 @@ parameter MSTATUS_MPP_LO      = 11;  // Machine Previous Privilege (低位)
 parameter MSTATUS_MPP_HI      = 12;  // Machine Previous Privilege (高位)
 
 // mie 字段定义
+parameter MIE_SSIE_BIT        = 1;   // Supervisor Software Interrupt Enable
+parameter MIE_STIE_BIT        = 5;   // Supervisor Timer Interrupt Enable
+parameter MIE_SEIE_BIT        = 9;   // Supervisor External Interrupt Enable
 parameter MIE_MTIE_BIT        = 7;   // Machine Timer Interrupt Enable
+
+// mip 字段定义 (pending bits mirror enable bits)
+parameter MIP_SSIP_BIT        = 1;   // Supervisor Software Interrupt Pending
+parameter MIP_STIP_BIT        = 5;   // Supervisor Timer Interrupt Pending
+parameter MIP_SEIP_BIT        = 9;   // Supervisor External Interrupt Pending
+parameter MIP_MTIP_BIT        = 7;   // Machine Timer Interrupt Pending
+
+// S 模式中断代码 (最高位为1表示中断)
+parameter INT_S_SOFT          = 32'h80000001;  // Supervisor Software Interrupt
+parameter INT_S_TIMER         = 32'h80000005;  // Supervisor Timer Interrupt
+parameter INT_S_EXT           = 32'h80000009;  // Supervisor External Interrupt
 
 // 特权模式
 parameter PRIV_U = 2'b00;  // User mode

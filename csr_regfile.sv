@@ -58,8 +58,13 @@ module csr_regfile (
     logic [31:0] mcause;     // Machine Cause
     logic [31:0] mtval;      // Machine Trap Value
     
-    // mip (Machine Interrupt Pending) 由硬件设置
-    logic [31:0] mip;
+    // mip (Machine Interrupt Pending) - 部分由硬件设置，部分可软件写入
+    logic [31:0] mip_sw;     // 软件可写部分 (STIP, SSIP 等)
+    logic [31:0] mip;        // 组合后的 mip (硬件 | 软件)
+    
+    // 委托寄存器
+    logic [31:0] mideleg;    // Machine Interrupt Delegation
+    logic [31:0] medeleg;    // Machine Exception Delegation
     
     // PMP CSRs
     logic [31:0] pmpcfg0;    // PMP Config 0
@@ -98,11 +103,15 @@ module csr_regfile (
     
     // ==================== CSR 读取逻辑 ====================
     
-    // mip 由硬件设置：bit 7 = Timer interrupt pending
+    // mip 组合：硬件位 (MTIP) + 软件可写位 (STIP, SSIP)
     always_comb begin
-        mip = 32'h0;
-        mip[MIE_MTIE_BIT] = timer_interrupt;  // Timer 中断 pending 位
+        mip = mip_sw;  // 先取软件写入的值
+        mip[MIP_MTIP_BIT] = timer_interrupt;  // MTIP 由硬件覆盖 (只读)
     end
+    
+    // sie/sip 是 mie/mip 的 S 模式视图 (只显示 S 模式相关的位)
+    // S 模式可见的中断位掩码: SSIP(1), STIP(5), SEIP(9)
+    localparam S_INT_MASK = (1 << MIP_SSIP_BIT) | (1 << MIP_STIP_BIT) | (1 << MIP_SEIP_BIT);
     
     always_comb begin
         case (csr_addr)
@@ -114,11 +123,16 @@ module csr_regfile (
             CSR_MCAUSE:    csr_rdata = mcause;
             CSR_MTVAL:     csr_rdata = mtval;
             CSR_MIP:       csr_rdata = mip;
+            CSR_MHARTID:   csr_rdata = 32'h0;  // Hart ID, 只读, 恒为 0
+            CSR_MIDELEG:   csr_rdata = mideleg;
+            CSR_MEDELEG:   csr_rdata = medeleg;
             CSR_PMPCFG0:   csr_rdata = pmpcfg0;
             CSR_PMPADDR0:  csr_rdata = pmpaddr0;
             CSR_SATP:      csr_rdata = satp;
             // Supervisor CSRs
             CSR_SSTATUS:   csr_rdata = sstatus;
+            CSR_SIE:       csr_rdata = mie & S_INT_MASK;   // sie 是 mie 的子集视图
+            CSR_SIP:       csr_rdata = mip & S_INT_MASK;   // sip 是 mip 的子集视图
             CSR_STVEC:     csr_rdata = stvec;
             CSR_SSCRATCH:  csr_rdata = sscratch;
             CSR_SEPC:      csr_rdata = sepc;
@@ -156,6 +170,9 @@ module csr_regfile (
             mepc      <= 32'h0;
             mcause    <= 32'h0;
             mtval     <= 32'h0;
+            mip_sw    <= 32'h0;          // 软件可写的中断 pending 位
+            mideleg   <= 32'h0;          // 中断委托寄存器
+            medeleg   <= 32'h0;          // 异常委托寄存器
             pmpcfg0   <= 32'h0;
             pmpaddr0  <= 32'h0;
             satp      <= 32'h0;  // 复位时分页关闭
@@ -221,6 +238,14 @@ module csr_regfile (
                 CSR_MEPC:     mepc <= {csr_new_value[31:2], 2'b00};   // 4字节对齐
                 CSR_MCAUSE:   mcause <= csr_new_value;
                 CSR_MTVAL:    mtval <= csr_new_value;
+                CSR_MIP:      begin
+                    // mip: 只有 STIP 和 SSIP 可由 M 模式软件写入
+                    // MTIP 是硬件只读的
+                    mip_sw[MIP_STIP_BIT] <= csr_new_value[MIP_STIP_BIT];
+                    mip_sw[MIP_SSIP_BIT] <= csr_new_value[MIP_SSIP_BIT];
+                end
+                CSR_MIDELEG:  mideleg <= csr_new_value;
+                CSR_MEDELEG:  medeleg <= csr_new_value;
                 CSR_PMPCFG0:  pmpcfg0 <= csr_new_value;
                 CSR_PMPADDR0: pmpaddr0 <= csr_new_value;
                 CSR_SATP:     satp <= csr_new_value;
@@ -229,6 +254,16 @@ module csr_regfile (
                     sstatus[SSTATUS_SIE_BIT]  <= csr_new_value[SSTATUS_SIE_BIT];
                     sstatus[SSTATUS_SPIE_BIT] <= csr_new_value[SSTATUS_SPIE_BIT];
                     sstatus[SSTATUS_SPP_BIT]  <= csr_new_value[SSTATUS_SPP_BIT];
+                end
+                CSR_SIE:      begin
+                    // sie 写入实际影响 mie 的 S 模式位
+                    mie[MIE_SSIE_BIT] <= csr_new_value[MIE_SSIE_BIT];
+                    mie[MIE_STIE_BIT] <= csr_new_value[MIE_STIE_BIT];
+                    mie[MIE_SEIE_BIT] <= csr_new_value[MIE_SEIE_BIT];
+                end
+                CSR_SIP:      begin
+                    // sip 写入: 只有 SSIP 可由 S 模式写入
+                    mip_sw[MIP_SSIP_BIT] <= csr_new_value[MIP_SSIP_BIT];
                 end
                 CSR_STVEC:    stvec <= csr_new_value;
                 CSR_SSCRATCH: sscratch <= csr_new_value;
