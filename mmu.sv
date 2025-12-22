@@ -82,6 +82,7 @@ module mmu (
     logic [31:0] saved_vaddr;       // Saved virtual address
     logic        saved_is_write;
     logic        saved_is_execute;
+    logic [1:0]  saved_priv_mode;   // Saved privilege mode for PTW
     logic [31:0] pte_reg;           // Current PTE (used for Level 2 address calculation)
     wire [21:0] ppn = pte_reg[31:10];  // Physical Page Number from PTE
     
@@ -100,6 +101,7 @@ module mmu (
             saved_vaddr <= 32'h0;
             saved_is_write <= 1'b0;
             saved_is_execute <= 1'b0;
+            saved_priv_mode <= 2'b11;  // Default to M-mode
             pte_reg <= 32'h0;
 
         end else begin
@@ -113,6 +115,7 @@ module mmu (
                             saved_vaddr <= vaddr;
                             saved_is_write <= is_write;
                             saved_is_execute <= is_execute;
+                            saved_priv_mode <= priv_mode;
                         end
                     end
                 end
@@ -188,7 +191,6 @@ module mmu (
     logic        tlb_perm_ok;
     
     tlb #(
-        .ENTRIES(32)
     ) u_tlb (
         .clk(clk),
         .rst(rst),
@@ -300,7 +302,7 @@ module mmu (
                         if (ptw_data[19:10] != 10'b0) begin
                             // 超级页未对齐 -> page fault
                             next_state = FAULT;
-                        end else if (!check_pte_perm(ptw_data, priv_mode, saved_is_write, saved_is_execute)) begin
+                        end else if (!check_pte_perm(ptw_data, saved_priv_mode, saved_is_write, saved_is_execute)) begin
                             // 权限检查失败
                             next_state = FAULT;
                         end else begin
@@ -338,7 +340,7 @@ module mmu (
                     end else if (!(ptw_data[PTE_R] | ptw_data[PTE_X])) begin
                         // 二级 PTE 必须是叶子
                         next_state = FAULT;
-                    end else if (!check_pte_perm(ptw_data, priv_mode, saved_is_write, saved_is_execute)) begin
+                    end else if (!check_pte_perm(ptw_data, saved_priv_mode, saved_is_write, saved_is_execute)) begin
                         // 权限检查失败
                         next_state = FAULT;
                     end else begin

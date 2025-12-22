@@ -10,6 +10,8 @@ typedef struct packed {
     logic [31:0] predicted_pc;
     logic        prediction_valid;
     logic        valid;
+    logic        exception_valid; // 异常有效标志 (Page Fault等)
+    logic [31:0] exception_cause; // 异常原因
 } if_id_reg_t;
 
 // ID/EX流水线寄存器
@@ -45,6 +47,8 @@ typedef struct packed {
     logic        is_mret;         // mret 指令
     logic        is_sfence_vma;   // sfence.vma 指令 (TLB flush)
     logic        is_illegal;      // 非法指令
+    logic        exception_valid; // 异常有效标志 (传播自 IF 阶段)
+    logic [31:0] exception_cause; // 异常原因
     logic        valid;
 } id_ex_reg_t;
 
@@ -61,6 +65,7 @@ typedef struct packed {
     logic        reg_write;
     logic        mem_to_reg;
     logic        valid;
+    logic [31:0] pc;          // PC of instruction (for exception reporting in MEM stage)
 } ex_mem_reg_t;
 
 // MEM/WB流水线寄存器

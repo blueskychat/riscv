@@ -80,7 +80,7 @@ module csr_regfile (
     
     // satp 输出
     assign satp_out = satp;
-    assign paging_enabled = satp[31];  // Sv32: bit 31 = MODE (1 = 启用分页)
+    assign paging_enabled = satp[31] && (current_priv != PRIV_M);  // Sv32: bit 31 = MODE (1 = 启用分页), disabled in M-mode
     
     // ==================== CSR 读取逻辑 ====================
     

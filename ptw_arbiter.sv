@@ -72,13 +72,13 @@ module ptw_arbiter (
         case (state)
             IDLE: begin
                 // 空闲状态：按优先级仲裁，立即授权
+                // NOTE: serving_* remains 0 in IDLE - ack routing only happens in LOCKED states
+                // This breaks the timing loop: req -> serving -> ack -> req
                 if (dmmu_ptw_req_i) begin
                     grant_dmmu = 1'b1;
-                    serving_dmmu = 1'b1;
                     state_next = LOCKED_DMMU;
                 end else if (immu_ptw_req_i) begin
                     grant_immu = 1'b1;
-                    serving_immu = 1'b1;
                     state_next = LOCKED_IMMU;
                 end
             end

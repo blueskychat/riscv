@@ -616,21 +616,36 @@ module riscv_cpu_top (
     if_stage u_if_stage (
         .clk            (sys_clk),
         .rst           (sys_rst),
-        .stall          (hazard_stall || mem_stall), // Stall signal for IF stage (mostly for debug/trace)
+        .stall          (hazard_stall || mem_stall),
         .flush          (flush_mask[0]),
         .if_id_next     (if_id_next),
-        .pc             (pc),                   //in
-        .ex_pc          (id_ex_reg.pc),         //in
-        .next_pc        (next_pc),               //out
-        .predicted_pc   (predicted_pc),        //out
-        .prediction_valid(prediction_valid),    //out
-        .branch_mispredict(branch_mispredict), //in
-        .correct_pc     (correct_pc),           //in
-        .ex_is_branch   (id_ex_reg.is_branch),  //in
-        .branch_redirect_id(branch_redirect_id),      //in
-        .branch_target_id(branch_target_id),    //in
-        .icache_invalidate(icache_invalidate),  // FENCE.I invalidate
-        .stall_req      (if_stall_req),         //out
+        .pc             (pc),
+        .ex_pc          (id_ex_reg.pc),
+        .next_pc        (next_pc),
+        .predicted_pc   (predicted_pc),
+        .prediction_valid(prediction_valid),
+        .branch_mispredict(branch_mispredict),
+        .correct_pc     (correct_pc),
+        .ex_is_branch   (id_ex_reg.is_branch),
+        .branch_redirect_id(branch_redirect_id),
+        .branch_target_id(branch_target_id),
+        .icache_invalidate(icache_invalidate),
+        
+        // MMU Signals
+        .satp           (satp_out),
+        .paging_enabled (paging_enabled),
+        .priv_mode      (priv_mode),
+        .sfence_flush_all(sfence_flush_all),
+        .sfence_flush_vpn(sfence_flush_vpn),
+        .sfence_flush_vpn_addr(sfence_flush_vpn_addr),
+        
+        // PTW Interface
+        .immu_ptw_addr  (immu_ptw_addr),
+        .immu_ptw_req   (immu_ptw_req),
+        .immu_ptw_data  (immu_ptw_data),
+        .immu_ptw_ack   (immu_ptw_ack),
+        
+        .stall_req      (if_stall_req),
         
         // Wishbone master interface
         .wb_adr_o       (wb_inst_adr),
@@ -728,22 +743,33 @@ module riscv_cpu_top (
                               !exception_trigger && 
                               !mem_stall;
     
+    // DMMU Page Fault (at MEM stage)
+    logic mem_exception_trigger;
+    assign mem_exception_trigger = dmmu_page_fault;
+
     // ========== Trap 进入信号 ==========
     // 异常或中断触发时进入 trap
-    assign trap_enter = (exception_trigger || interrupt_trigger) && !mem_stall;
+    // Priority: MEM Fault > EX Fault (from ID or EX)
+    assign trap_enter = (exception_trigger || interrupt_trigger || mem_exception_trigger || id_ex_reg.exception_valid) && !mem_stall;
     
     // ========== Trap 原因 ==========
     // 中断: mcause[31] = 1, 低位为中断原因
     // 异常: mcause[31] = 0, 低位为异常原因
     always_comb begin
-        if (interrupt_trigger) begin
+        if (mem_exception_trigger) begin
+            // MEM Stage Page Fault
+            trap_cause = {28'h0, dmmu_fault_type};
+        end else if (id_ex_reg.exception_valid) begin
+            // IF Stage Fault (propagated)
+            trap_cause = id_ex_reg.exception_cause;
+        end else if (interrupt_trigger) begin
             // Timer 中断
             trap_cause = INT_M_TIMER;  // 32'h80000007
         end else if (ex_illegal) begin
             // 非法指令异常
             trap_cause = EX_ILLEGAL_INST;  // 32'd2
         end else if (ex_ecall) begin
-            // ecall 根据当前特权模式决定异常代码
+            // ... (rest same) ...
             case (priv_mode)
                 PRIV_U:  trap_cause = EX_ECALL_U;   // User mode ecall
                 PRIV_S:  trap_cause = EX_ECALL_S;   // Supervisor mode ecall
@@ -757,11 +783,23 @@ module riscv_cpu_top (
         end
     end
     
-    // 异常/中断发生时的 PC (当前 EX 阶段的指令地址)
-    assign trap_pc = id_ex_reg.pc;
+    // 异常/中断发生时的 PC
+    // 如果是 MEM 阶段异常，使用 MEM 阶段的 PC
+    // 否则使用 EX 阶段的 PC (包括 IF 传播来的异常)
+    assign trap_pc = mem_exception_trigger ? ex_mem_reg.pc : id_ex_reg.pc;
     
-    // 异常值 (mtval) - 对于 ecall/ebreak/中断 为 0
-    assign trap_val = 32'h0;
+    // 异常值 (mtval) - 对于 page fault 为 faulting VA, 其他异常/中断为 0
+    always_comb begin
+        if (mem_exception_trigger) begin
+            // DMMU page fault: use virtual address from mem_stage
+            trap_val = mem_vaddr;
+        end else if (id_ex_reg.exception_valid) begin
+            // IMMU page fault propagated through pipeline: use the faulting PC
+            trap_val = id_ex_reg.pc;
+        end else begin
+            trap_val = 32'h0;
+        end
+    end
     
     // ========== 向量化中断支持 ==========
     // mtvec[1:0] = MODE: 00=Direct, 01=Vectored
@@ -831,7 +869,58 @@ module riscv_cpu_top (
         .paging_enabled (paging_enabled)
     );
     
+    // ==================== MMU & PTW Signals ====================
+    logic [31:0] immu_ptw_addr;
+    logic        immu_ptw_req;
+    logic [31:0] immu_ptw_data;
+    logic        immu_ptw_ack;
+    
+    logic [31:0] dmmu_ptw_addr;
+    logic        dmmu_ptw_req;
+    logic [31:0] dmmu_ptw_data;
+    logic        dmmu_ptw_ack;
+    
+    logic [31:0] dcache_ptw_addr;
+    logic        dcache_ptw_req;
+    logic [31:0] dcache_ptw_data;
+    logic        dcache_ptw_ack;
+    
+    logic [31:0] mem_vaddr;
+    logic        mem_req_valid;
+    
+    logic [31:0] dmmu_paddr;
+    logic        dmmu_translate_done;
+    logic        dmmu_page_fault;
+    logic [3:0]  dmmu_fault_type;
+    
+    // PTW Arbiter
+    ptw_arbiter u_ptw_arbiter (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .immu_ptw_addr_i(immu_ptw_addr),
+        .immu_ptw_req_i (immu_ptw_req),
+        .immu_ptw_data_o(immu_ptw_data),
+        .immu_ptw_ack_o (immu_ptw_ack),
+        
+        .dmmu_ptw_addr_i(dmmu_ptw_addr),
+        .dmmu_ptw_req_i (dmmu_ptw_req),
+        .dmmu_ptw_data_o(dmmu_ptw_data),
+        .dmmu_ptw_ack_o (dmmu_ptw_ack),
+        
+        .dcache_ptw_addr_o(dcache_ptw_addr),
+        .dcache_ptw_req_o (dcache_ptw_req),
+        .dcache_ptw_data_i(dcache_ptw_data),
+        .dcache_ptw_ack_i (dcache_ptw_ack)
+    );
+
     // 访存级 (Phase 1: DCache 接口抽取到顶层)
+    logic dcache_ready_internal;
+    logic mem_stage_ack;
+    
+    // If Page Fault, we ACK immediately (with fake data) so pipeline continues to exception
+    // If Translation Done, we pass DCache Ready
+    assign mem_stage_ack = (dmmu_page_fault) ? 1'b1 : (dmmu_translate_done && dcache_ready_internal);
+    
     mem_stage u_mem_stage (
         .clk            (sys_clk),
         .rst            (sys_rst),
@@ -839,18 +928,46 @@ module riscv_cpu_top (
         .flush          (flush_mask[3]),
         .ex_mem_reg     (ex_mem_reg),
         .mem_wb_next    (mem_wb_next),
-        // DCache CPU Interface (连接到顶层 DCache)
-        .dcache_addr_o  (dcache_addr),
+        // DCache CPU Interface (连接到 DMMU)
+        .dcache_addr_o  (mem_vaddr),
         .dcache_wdata_o (dcache_wdata),
         .dcache_we_o    (dcache_we),
         .dcache_be_o    (dcache_be),
-        .dcache_valid_o (dcache_valid),
+        .dcache_valid_o (mem_req_valid),
         .dcache_rdata_i (dcache_rdata),
-        .dcache_ready_i (dcache_ready),
+        .dcache_ready_i (mem_stage_ack),
         // FENCE.I DCache flush interface (直通到 DCache)
         .dcache_flush_req (dcache_flush_req),
         .dcache_flush_done(),  // 不连接，由 DCache 直接输出
         .stall_req      (mem_stall_req)
+    );
+    
+    // DMMU Instantiation
+    mmu u_dmmu (
+        .clk(sys_clk),
+        .rst(sys_rst),
+        .satp(satp_out),
+        .paging_enabled(paging_enabled),
+        .priv_mode(priv_mode),
+        
+        .vaddr(mem_vaddr),
+        .translate_req(mem_req_valid), // Only translate if request is valid
+        .is_write(dcache_we),
+        .is_execute(1'b0),
+        
+        .paddr(dmmu_paddr),
+        .translate_done(dmmu_translate_done),
+        .page_fault(dmmu_page_fault),
+        .fault_type(dmmu_fault_type),
+        
+        .ptw_addr(dmmu_ptw_addr),
+        .ptw_req(dmmu_ptw_req),
+        .ptw_data(dmmu_ptw_data),
+        .ptw_ack(dmmu_ptw_ack),
+        
+        .flush_all(sfence_flush_all),
+        .flush_vpn(sfence_flush_vpn),
+        .flush_vpn_addr(sfence_flush_vpn_addr)
     );
     
     // DCache - 顶层实例化 (Phase 1)
@@ -858,24 +975,24 @@ module riscv_cpu_top (
         .clk            (sys_clk),
         .rst            (sys_rst),
         
-        // CPU Interface (from mem_stage)
-        .mem_req_addr_i (dcache_addr),
+        // CPU Interface (from DMMU)
+        .mem_req_addr_i (dmmu_page_fault ? 32'h0 : dmmu_paddr), // Block access on fault
         .mem_req_wdata_i(dcache_wdata),
-        .mem_req_we_i   (dcache_we),
+        .mem_req_we_i   (dmmu_page_fault ? 1'b0 : dcache_we),   // Block write on fault
         .mem_req_be_i   (dcache_be),
-        .mem_req_valid_i(dcache_valid),
+        .mem_req_valid_i(mem_req_valid && dmmu_translate_done && !dmmu_page_fault),
         .mem_resp_data_o(dcache_rdata),
-        .mem_req_ready_o(dcache_ready),
+        .mem_req_ready_o(dcache_ready_internal),
         
         // FENCE.I Flush interface
         .flush_req_i    (dcache_flush_req),
         .flush_done_o   (dcache_flush_done),
         
-        // PTW Interface (Phase 1: 空连接，Phase 2 使用)
-        .ptw_addr_i     (32'h0),
-        .ptw_req_i      (1'b0),
-        .ptw_data_o     (),  // 未连接
-        .ptw_ack_o      (),  // 未连接
+        // PTW Interface (Connected to Arbiter)
+        .ptw_addr_i     (dcache_ptw_addr),
+        .ptw_req_i      (dcache_ptw_req),
+        .ptw_data_o     (dcache_ptw_data),
+        .ptw_ack_o      (dcache_ptw_ack),
         
         // Wishbone Master Interface
         .wb_adr_o       (wb_data_adr),

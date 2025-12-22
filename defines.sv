@@ -115,6 +115,9 @@ parameter EX_STORE_FAULT      = 32'd7;   // Store访问错误
 parameter EX_ECALL_U          = 32'd8;   // 用户模式ecall
 parameter EX_ECALL_S          = 32'd9;   // 监管模式ecall
 parameter EX_ECALL_M          = 32'd11;  // 机器模式ecall
+parameter EX_INST_PAGE_FAULT  = 32'd12;  // 指令页故障
+parameter EX_LOAD_PAGE_FAULT  = 32'd13;  // Load页故障
+parameter EX_STORE_PAGE_FAULT = 32'd15;  // Store/AMO页故障
 
 // 中断代码定义 (最高位为1表示中断)
 parameter INT_M_SOFT          = 32'h80000003;  // 机器模式软中断

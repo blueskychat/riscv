@@ -67,12 +67,13 @@ module dcache (
     // ========================================================================
     // L2 Cache Parameters (Phase 4)
     // ========================================================================
-    // 32KB = 512 sets × 4 ways × 16 bytes/line
+    // L2_SETS can be 256 (16KB) or 512 (32KB) - other params auto-computed
     localparam L2_SETS = 512;
     localparam L2_WAYS = 4;
     localparam L2_LINE_SIZE = 16;       // 16 bytes = 4 words
-    localparam L2_INDEX_WIDTH = 9;      // log2(512)
-    localparam L2_TAG_WIDTH = 19;       // 32 - 9 - 4
+    localparam L2_OFFSET_WIDTH = 4;     // log2(16) = 4
+    localparam L2_INDEX_WIDTH = $clog2(L2_SETS);  // 9 for 512 sets, 8 for 256 sets
+    localparam L2_TAG_WIDTH = 32 - L2_INDEX_WIDTH - L2_OFFSET_WIDTH;
     localparam L2_WORD_OFFSET_WIDTH = 2;
 
     // ========================================================================
@@ -119,9 +120,9 @@ module dcache (
     wire [L1_INDEX_WIDTH-1:0]      l1_index = current_req_addr[9:4];
     wire [L1_WORD_OFFSET_WIDTH-1:0] l1_word  = current_req_addr[3:2];
     
-    // L2: [31:13] Tag (19 bits) | [12:4] Index (9 bits) | [3:2] Word (2 bits) | [1:0] Byte (2 bits)
-    wire [L2_TAG_WIDTH-1:0]        l2_tag   = current_req_addr[31:13];
-    wire [L2_INDEX_WIDTH-1:0]      l2_index = current_req_addr[12:4];
+    // L2: Tag | Index | Word | Byte (widths computed from L2_SETS)
+    wire [L2_TAG_WIDTH-1:0]        l2_tag   = current_req_addr[31:L2_INDEX_WIDTH+L2_OFFSET_WIDTH];
+    wire [L2_INDEX_WIDTH-1:0]      l2_index = current_req_addr[L2_INDEX_WIDTH+L2_OFFSET_WIDTH-1:L2_OFFSET_WIDTH];
     wire [L2_WORD_OFFSET_WIDTH-1:0] l2_word  = current_req_addr[3:2];
 
     // ========================================================================
@@ -864,8 +865,8 @@ module dcache (
     
     // Evicted L1 line's L2 address (computed from old_tag + latched_index)
     wire [31:0] evicted_addr = {old_tag, latched_index, 4'b0000};
-    wire [L2_TAG_WIDTH-1:0]   evicted_l2_tag   = evicted_addr[31:13];
-    wire [L2_INDEX_WIDTH-1:0] evicted_l2_index = evicted_addr[12:4];
+    wire [L2_TAG_WIDTH-1:0]   evicted_l2_tag   = evicted_addr[31:L2_INDEX_WIDTH+L2_OFFSET_WIDTH];
+    wire [L2_INDEX_WIDTH-1:0] evicted_l2_index = evicted_addr[L2_INDEX_WIDTH+L2_OFFSET_WIDTH-1:L2_OFFSET_WIDTH];
     
     // L2 way that holds the evicted L1 line (for L1_TO_L2 update)
     // Since L2 is inclusive, the evicted line MUST be in L2

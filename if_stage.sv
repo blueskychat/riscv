@@ -26,6 +26,20 @@ module if_stage (
     // FENCE.I ICache invalidate
     input  wire logic        icache_invalidate,
     
+    // IMMU & Paging Signals
+    input  wire logic [31:0] satp,
+    input  wire logic        paging_enabled,
+    input  wire logic [1:0]  priv_mode,
+    input  wire logic        sfence_flush_all,
+    input  wire logic        sfence_flush_vpn,
+    input  wire logic [19:0] sfence_flush_vpn_addr,
+    
+    // IMMU PTW Interface
+    output logic [31:0]      immu_ptw_addr,
+    output logic             immu_ptw_req,
+    input  wire logic [31:0] immu_ptw_data,
+    input  wire logic        immu_ptw_ack,
+    
     output logic        stall_req,
     // Wishbone master interface (Connected to ICACHE now)
     output logic [31:0] wb_adr_o,
@@ -135,10 +149,45 @@ module if_stage (
         end
     end
     
-    // ICACHE signals
+    // IMMU signals
+    logic [31:0] immu_paddr;
+    logic        immu_translate_done;
+    logic        immu_page_fault;
+    logic [3:0]  immu_fault_type;
+    
+    mmu u_immu (
+        .clk(clk),
+        .rst(rst),
+        .satp(satp),
+        .paging_enabled(paging_enabled),
+        .priv_mode(priv_mode),
+        
+        .vaddr(pc),
+        .translate_req(!rst), 
+        .is_write(1'b0),
+        .is_execute(1'b1),
+        
+        .paddr(immu_paddr),
+        .translate_done(immu_translate_done),
+        .page_fault(immu_page_fault),
+        .fault_type(immu_fault_type),
+        
+        .ptw_addr(immu_ptw_addr),
+        .ptw_req(immu_ptw_req),
+        .ptw_data(immu_ptw_data),
+        .ptw_ack(immu_ptw_ack),
+        
+        .flush_all(sfence_flush_all),
+        .flush_vpn(sfence_flush_vpn),
+        .flush_vpn_addr(sfence_flush_vpn_addr)
+    );
 
+    // ICACHE signals
     logic [31:0] icache_inst;
     logic        icache_ready;
+    logic        icache_req_valid;
+    
+    assign icache_req_valid = immu_translate_done && !immu_page_fault && !rst;
     
     // ICACHE instantiation
     icache u_icache (
@@ -146,9 +195,9 @@ module if_stage (
         .rst            (rst),
         
         // CPU Interface
-        .pc_i           (pc),
-        .fetch_en_i     (!rst), // Always request if not in reset
-        .invalidate_i   (icache_invalidate),  // FENCE.I invalidate
+        .pc_i           (immu_paddr),
+        .fetch_en_i     (icache_req_valid), 
+        .invalidate_i   (icache_invalidate), 
         .inst_o         (icache_inst),
         .ready_o        (icache_ready),
         
@@ -166,17 +215,36 @@ module if_stage (
     );
     
     // Stall request if cache is not ready
-    assign stall_req = !icache_ready;
+    // Stall request if:
+    // 1. IMMU is translating (wait for TLB/PTW)
+    // 2. ICache is busy (wait for Hit/Refill)
+    // BUT if page fault, DO NOT STALL (pass exception)
+    assign stall_req = (!immu_translate_done) || (immu_translate_done && !immu_page_fault && !icache_ready);
 
     // IF/ID register update
     always_comb begin
         if_id_next = '0;
         if (!flush) begin
             if_id_next.pc = pc; 
-            if_id_next.inst = icache_inst;
-            if_id_next.predicted_pc = predicted_pc;
-            if_id_next.prediction_valid = prediction_valid;
-            if_id_next.valid = icache_ready; 
+            
+            if (immu_page_fault) begin
+                // Page Fault: NOP + Exception
+                if_id_next.inst = 32'h0;
+                if_id_next.valid = 1'b1;
+                if_id_next.exception_valid = 1'b1;
+                if_id_next.exception_cause = {28'b0, immu_fault_type};
+                // Don't use predicted PC on fault
+                if_id_next.predicted_pc = pc + 4;
+                if_id_next.prediction_valid = 1'b0;
+            end else begin
+                // Normal Fetch
+                if_id_next.inst = icache_inst;
+                if_id_next.predicted_pc = predicted_pc;
+                if_id_next.prediction_valid = prediction_valid;
+                if_id_next.valid = icache_ready; 
+                if_id_next.exception_valid = 1'b0;
+                if_id_next.exception_cause = 32'h0;
+            end
         end
     end
 endmodule

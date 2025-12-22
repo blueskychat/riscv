@@ -382,6 +382,9 @@ module testbench;
     end
     
     // 波形输出
+    
+
+    
     /*
     initial begin
         $dumpfile("cpu.vcd");

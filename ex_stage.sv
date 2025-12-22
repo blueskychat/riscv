@@ -177,6 +177,7 @@ module ex_stage (
             ex_mem_next.alu_result = alu_result;
             ex_mem_next.rs2_data = rs2_forwarded;
             ex_mem_next.pc_plus_4 = id_ex_reg.pc + 4;
+            ex_mem_next.pc = id_ex_reg.pc;
             ex_mem_next.rd = id_ex_reg.rd;
             ex_mem_next.mem_read = id_ex_reg.mem_read;
             ex_mem_next.mem_write = id_ex_reg.mem_write;

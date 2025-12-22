@@ -119,9 +119,20 @@ module id_stage (
             id_ex_next.predicted_pc = if_id_reg.predicted_pc;
             id_ex_next.prediction_valid = if_id_reg.prediction_valid;
             id_ex_next.valid = 1'b1;
+            id_ex_next.exception_valid = if_id_reg.exception_valid;
+            id_ex_next.exception_cause = if_id_reg.exception_cause;
             
-            // 根据操作码生成控制信号
-            case (opcode)
+            if (if_id_reg.exception_valid) begin
+                // 如果IF阶段发生异常（如Page Fault），则当前指令视为NOP，但保留异常信息传给EX阶段
+                id_ex_next.reg_write = 1'b0;
+                id_ex_next.mem_read = 1'b0;
+                id_ex_next.mem_write = 1'b0;
+                id_ex_next.alu_op = ALU_ADD;
+                id_ex_next.is_branch = 1'b0;
+                id_ex_next.is_jump = 1'b0;
+            end else begin
+                // 根据操作码生成控制信号
+                case (opcode)
                 OP_LUI: begin
                     id_ex_next.alu_op = ALU_LUI;
                     id_ex_next.alu_src1_sel = 1'b0;
@@ -319,7 +330,9 @@ module id_stage (
                     id_ex_next.is_illegal = 1'b1;
                 end
 
+
             endcase
+            end // else (no exception)
             
         end
                 
