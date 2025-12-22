@@ -227,7 +227,16 @@ module if_stage (
         if (!flush) begin
             if_id_next.pc = pc; 
             
-            if (immu_page_fault) begin
+            // 指令地址未对齐检测 (PC 必须4字节对齐)
+            if (pc[1:0] != 2'b00) begin
+                // Instruction Address Misaligned Exception
+                if_id_next.inst = 32'h0;  // NOP
+                if_id_next.valid = 1'b1;
+                if_id_next.exception_valid = 1'b1;
+                if_id_next.exception_cause = EX_INST_MISALIGN;  // mcause = 0
+                if_id_next.predicted_pc = pc + 4;
+                if_id_next.prediction_valid = 1'b0;
+            end else if (immu_page_fault) begin
                 // Page Fault: NOP + Exception
                 if_id_next.inst = 32'h0;
                 if_id_next.valid = 1'b1;

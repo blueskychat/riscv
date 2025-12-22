@@ -36,7 +36,10 @@ module ex_stage (
     
     // SFENCE.VMA 信号 (用于 TLB 刷新)
     output logic        ex_sfence_vma,     // sfence.vma 指令
-    output logic [31:0] sfence_vaddr_o     // rs1 值 (用于选择性 VPN 刷新的虚拟地址)
+    output logic [31:0] sfence_vaddr_o,    // rs1 值 (用于选择性 VPN 刷新的虚拟地址)
+    
+    // 分支目标地址未对齐异常
+    output logic        ex_branch_misalign // 分支/跳转目标地址未对齐
 );
 
     // ALU输入选择（包含转发）
@@ -104,6 +107,13 @@ module ex_stage (
             actual_branch_target = id_ex_reg.pc + 4;
         end
     end
+    
+    // 分支目标地址对齐检测
+    // 当分支/跳转实际发生且目标地址未4字节对齐时触发异常
+    assign ex_branch_misalign = id_ex_reg.valid && 
+                                (id_ex_reg.is_branch || id_ex_reg.is_jump) && 
+                                actual_branch_taken && 
+                                (actual_branch_target[1:0] != 2'b00);
     
     // 分支预测错误检测
     always_comb begin

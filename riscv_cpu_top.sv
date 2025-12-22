@@ -584,6 +584,7 @@ module riscv_cpu_top (
     
     // 特权指令信号
     logic ex_ecall, ex_ebreak, ex_mret, ex_illegal;
+    logic ex_branch_misalign;  // 分支目标地址未对齐异常
     
     // SFENCE.VMA 信号 (TLB 刷新)
     logic        ex_sfence_vma;
@@ -709,15 +710,17 @@ module riscv_cpu_top (
         .ex_illegal     (ex_illegal),
         // SFENCE.VMA 信号
         .ex_sfence_vma  (ex_sfence_vma),
-        .sfence_vaddr_o (sfence_vaddr)
+        .sfence_vaddr_o (sfence_vaddr),
+        // 分支目标地址未对齐信号
+        .ex_branch_misalign(ex_branch_misalign)
     );
     
     // ==================== 异常/中断处理逻辑 ====================
     
     // ========== 异常信号 (来自 EX stage) ==========
-    // 同步异常: ecall, ebreak, illegal instruction
+    // 同步异常: ecall, ebreak, illegal instruction, branch misalign
     logic exception_trigger;
-    assign exception_trigger = ex_ecall || ex_ebreak || ex_illegal;
+    assign exception_trigger = ex_ecall || ex_ebreak || ex_illegal || ex_branch_misalign;
     
     // ========== Timer 中断检测 ==========
     // Timer 中断待处理条件:
@@ -778,6 +781,8 @@ module riscv_cpu_top (
             endcase
         end else if (ex_ebreak) begin
             trap_cause = EX_BREAKPOINT;  // Breakpoint exception
+        end else if (ex_branch_misalign) begin
+            trap_cause = EX_INST_MISALIGN;  // Instruction address misaligned (for branch target)
         end else begin
             trap_cause = 32'h0;
         end
@@ -796,6 +801,9 @@ module riscv_cpu_top (
         end else if (id_ex_reg.exception_valid) begin
             // IMMU page fault propagated through pipeline: use the faulting PC
             trap_val = id_ex_reg.pc;
+        end else if (ex_branch_misalign) begin
+            // Branch target misalign: use the misaligned target address
+            trap_val = correct_pc;
         end else begin
             trap_val = 32'h0;
         end

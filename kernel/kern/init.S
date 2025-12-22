@@ -88,7 +88,7 @@ PAGE_TABLE_USER_STACK_3:
     .section .rodata
     // 启动时输出的信息
 monitor_version:
-    .asciz "M" //ONITOR for RISC-V - initialized."
+    .asciz "MONITOR for RISC-V - initialized."
     .p2align 2
     .word 0
 

@@ -2,19 +2,19 @@
 
 // hazard_unit.sv - 危险检测和流水线控制
 module hazard_unit (
-    input  logic        id_ex_mem_read,     // Does instr in EX read from memory?
-    input  logic        id_ex_reg_write,    // Does instr in EX write to a register?
-    input  logic [4:0]  id_ex_rd,
-    input  logic        ex_is_branch,       // Is the instruction in EX a branch?
-    input  logic        ex_mem_mem_read,    // Does instr in MEM read from memory?
-    input  logic [4:0]  ex_mem_rd,          // Destination register in MEM stage
-    input  logic [31:0] if_id_inst,         // Full instruction from IF/ID
-    input  logic [4:0]  if_id_rs1,
-    input  logic [4:0]  if_id_rs2,
-    input  logic        branch_mispredict,
-    input  logic        branch_redirect_id,
-    input  logic        inst_mem_wait,
-    input  logic        data_mem_wait,
+    input  wire logic        id_ex_mem_read,     // Does instr in EX read from memory?
+    input  wire logic        id_ex_reg_write,    // Does instr in EX write to a register?
+    input  wire logic [4:0]  id_ex_rd,
+    input  wire logic        ex_is_branch,       // Is the instruction in EX a branch?
+    input  wire logic        ex_mem_mem_read,    // Does instr in MEM read from memory?
+    input  wire logic [4:0]  ex_mem_rd,          // Destination register in MEM stage
+    input  wire logic [31:0] if_id_inst,         // Full instruction from IF/ID
+    input  wire logic [4:0]  if_id_rs1,
+    input  wire logic [4:0]  if_id_rs2,
+    input  wire logic        branch_mispredict,
+    input  wire logic        branch_redirect_id,
+    input  wire logic        inst_mem_wait,
+    input  wire logic        data_mem_wait,
     
     output logic        hazard_stall,
     output logic        mem_stall,
