@@ -395,6 +395,7 @@ module riscv_cpu_top (
 
     // CLINT (Core Local Interruptor) 模块
     logic timer_interrupt;  // Timer 中断信号
+    logic [63:0] mtime;     // mtime 值 (Zicntr: time/timeh CSR)
     
     clint clint_inst (
         .clk_i(sys_clk),
@@ -411,7 +412,10 @@ module riscv_cpu_top (
         .wb_cyc_i(wb_slave3_cyc),
         
         // Timer interrupt output
-        .timer_interrupt(timer_interrupt)
+        .timer_interrupt(timer_interrupt),
+        
+        // mtime output (for Zicntr time/timeh CSR)
+        .mtime_o(mtime)
     );
     
     // CLINT 不支持 retry 和 error 信号
@@ -865,6 +869,7 @@ module riscv_cpu_top (
         .mret_exec      (ex_mret && !mem_stall),
         // 中断输入
         .timer_interrupt(timer_interrupt),
+        .mtime_i        (mtime),           // Zicntr: time/timeh CSR
         // 中断输出
         .mie_mtie       (mie_mtie),
         .mstatus_mie    (mstatus_mie),

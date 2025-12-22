@@ -194,7 +194,7 @@ SHELL:
     li t0, CLINT_MTIME
     lw t1, 0(t0)        // 读取 mtime 低 32 位
     lw t2, 4(t0)        // 读取 mtime 高 32 位
-    li t3, 10000000
+    li t3, 1000000000
     add t3, t1, t3      // 低 32 位 + 10000000
     sltu t1, t3, t1     // 生成进位，若进位 t1 = 1
     add t2, t2, t1      // 高 32 位进位

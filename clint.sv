@@ -15,7 +15,10 @@ module clint (
     input  wire logic        wb_cyc_i,
     
     // Timer interrupt output
-    output logic             timer_interrupt
+    output logic             timer_interrupt,
+    
+    // mtime output for CSR access (Zicntr: time/timeh)
+    output logic [63:0]      mtime_o
 );
 
     // ==================== CLINT 寄存器 ====================
@@ -109,5 +112,8 @@ module clint (
     // 当 mtime >= mtimecmp 时产生中断
     
     assign timer_interrupt = (mtime >= mtimecmp);
+    
+    // mtime 输出 (用于 CSR time/timeh 访问)
+    assign mtime_o = mtime;
 
 endmodule

@@ -92,6 +92,10 @@ parameter CSR_PMPADDR0  = 12'h3B0;  // PMP Address 0
 // Supervisor CSR 地址 (用于分页)
 parameter CSR_SATP      = 12'h180;  // Supervisor Address Translation and Protection
 
+// Zicntr 扩展: 用户模式只读时间计数器
+parameter CSR_TIME      = 12'hC01;  // time: mtime 低32位 (只读)
+parameter CSR_TIMEH     = 12'hC81;  // timeh: mtime 高32位 (只读, RV32)
+
 // CSR 操作类型
 typedef enum logic [2:0] {
     CSR_OP_NONE  = 3'b000,  // 无CSR操作

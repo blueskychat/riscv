@@ -25,6 +25,7 @@ module csr_regfile (
     
     // 中断输入
     input  wire logic        timer_interrupt, // Timer 中断信号
+    input  wire logic [63:0] mtime_i,         // mtime 值 (Zicntr: time/timeh CSR)
     
     // 中断使能输出
     output logic             mie_mtie,      // Timer 中断使能
@@ -103,6 +104,9 @@ module csr_regfile (
             CSR_PMPCFG0:   csr_rdata = pmpcfg0;
             CSR_PMPADDR0:  csr_rdata = pmpaddr0;
             CSR_SATP:      csr_rdata = satp;
+            // Zicntr: time/timeh (read-only, mapped from mtime)
+            CSR_TIME:      csr_rdata = mtime_i[31:0];
+            CSR_TIMEH:     csr_rdata = mtime_i[63:32];
             default:       csr_rdata = 32'h0;
         endcase
     end
