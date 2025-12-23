@@ -86,22 +86,27 @@ module dcache (
     logic [31:0] current_req_wdata;
     logic        current_req_is_ptw;
     
-    // Priority: CPU Memory Request > PTW Request
+    // Priority: PTW Request > CPU Memory Request
+    // CRITICAL: PTW must have higher priority because:
+    // 1. MMU needs PTW to complete address translation
+    // 2. If MEM stage is stalled waiting for DMMU, its mem_req_valid stays high
+    // 3. IMMU PTW would be starved forever if CPU request has higher priority
     always_comb begin
-        if (mem_req_valid_i) begin
-            current_req_addr   = mem_req_addr_i;
-            current_req_wdata  = mem_req_wdata_i;
-            current_req_we     = mem_req_we_i;
-            current_req_be     = mem_req_be_i;
-            current_req_valid  = 1'b1;
-            current_req_is_ptw = 1'b0;
-        end else if (ptw_req_i) begin
+        if (ptw_req_i) begin
+            // PTW has highest priority - MMU needs this to complete translation
             current_req_addr   = ptw_addr_i;
             current_req_wdata  = 32'h0;
             current_req_we     = 1'b0;      // PTW is read-only
             current_req_be     = 4'hF;      // PTW always reads full word
             current_req_valid  = 1'b1;
             current_req_is_ptw = 1'b1;
+        end else if (mem_req_valid_i) begin
+            current_req_addr   = mem_req_addr_i;
+            current_req_wdata  = mem_req_wdata_i;
+            current_req_we     = mem_req_we_i;
+            current_req_be     = mem_req_be_i;
+            current_req_valid  = 1'b1;
+            current_req_is_ptw = 1'b0;
         end else begin
             current_req_addr   = 32'h0;
             current_req_wdata  = 32'h0;

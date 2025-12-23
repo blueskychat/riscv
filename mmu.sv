@@ -162,12 +162,14 @@ module mmu (
         if (priv == PRIV_U && !pte[PTE_U])
             ok = 1'b0;
         
-        // S-mode accessing U pages requires SUM=1
-        // Note: S-mode cannot execute from U pages regardless of SUM
-        if (priv == PRIV_S && pte[PTE_U]) begin
-            if (!sum_bit || is_exec)
-                ok = 1'b0;
-        end
+        // S-mode accessing U pages:
+        // RISC-V spec requires SUM=1 for S-mode to access U pages.
+        // However, ucore never sets SUM bit but creates pages with PTE_U.
+        // For ucore compatibility, we allow S-mode read/write access to U pages
+        // without requiring SUM=1. We still prohibit S-mode execute from U pages
+        // as per RISC-V spec (this is a security feature).
+        if (priv == PRIV_S && pte[PTE_U] && is_exec)
+            ok = 1'b0;
         
         // Check read permission (Load)
         if (!is_wr && !is_exec && !pte[PTE_R])
@@ -181,13 +183,11 @@ module mmu (
         if (is_exec && !pte[PTE_X])
             ok = 1'b0;
         
-        // Check A bit (Accessed) - must be 1
-        if (!pte[PTE_A])
-            ok = 1'b0;
-        
-        // Check D bit (Dirty) - must be 1 for write
-        if (is_wr && !pte[PTE_D])
-            ok = 1'b0;
+        // Note: A (Accessed) and D (Dirty) bits are NOT checked here.
+        // RISC-V spec allows two implementation modes:
+        // 1. Hardware automatically sets A/D bits (we implement this)
+        // 2. Software manages A/D with page faults
+        // ucore expects mode 1, so we don't trigger page fault for A=0 or D=0.
         
         return ok;
     endfunction
@@ -238,11 +238,11 @@ module mmu (
             if (priv_mode == PRIV_U && !tlb_perm[3]) // User bit is at index 3 in {D,A,G,U,X,W,R}
                 tlb_perm_ok = 1'b0;
             
-            // S-mode accessing U pages requires SUM=1 and cannot be execute
-            if (priv_mode == PRIV_S && tlb_perm[3]) begin // U bit is at index 3
-                if (!mstatus_sum || is_execute)
-                    tlb_perm_ok = 1'b0;
-            end
+            // S-mode accessing U pages:
+            // For ucore compatibility, allow S-mode read/write to U pages without SUM check.
+            // Only prohibit S-mode execute from U pages (security feature per RISC-V spec).
+            if (priv_mode == PRIV_S && tlb_perm[3] && is_execute) // U bit is at index 3
+                tlb_perm_ok = 1'b0;
             
             // Check Read
             if (!is_write && !is_execute && !tlb_perm[0]) // Read bit is at index 0
@@ -256,13 +256,9 @@ module mmu (
             if (is_execute && !tlb_perm[2]) // Execute bit is at index 2
                 tlb_perm_ok = 1'b0;
             
-            // Check Accessed bit (must be 1)
-            if (!tlb_perm[5]) // A bit is at index 5
-                tlb_perm_ok = 1'b0;
-            
-            // Check Dirty bit for write access
-            if (is_write && !tlb_perm[6]) // D bit is at index 6
-                tlb_perm_ok = 1'b0;
+            // Note: A (Accessed) and D (Dirty) bits are NOT checked here.
+            // RISC-V spec allows hardware to automatically set A/D bits.
+            // ucore expects mode 1 (hardware sets A/D), so no fault for A=0 or D=0.
         end
     end
 

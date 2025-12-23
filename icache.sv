@@ -24,31 +24,32 @@ module icache (
     input  wire         wb_err_i
 );
 
-    // Cache parameters  4*512*16=32KB
+    // Cache parameters  4*512*16=32KB (or 4*256*16=16KB if SETS=256)
     // data_bram和tag_bram综合的结果是共占用了10个BRAM
     localparam WAYS = 4;
-    localparam SETS = 512;
-    localparam LINE_SIZE = 16;      // 16 bytes = 4 words
+    localparam SETS = 256;//512;              // <-- 只需修改这里：512 -> 256
+    localparam LINE_SIZE = 16;          // 16 bytes = 4 words
     localparam WORDS_PER_LINE = 4;
     
-    localparam INDEX_WIDTH = 9;     // log2(512)
-    localparam OFFSET_WIDTH = 4;    // log2(16)
-    localparam TAG_WIDTH = 19;      // 32 - 9 - 4
-    localparam WORD_OFFSET_WIDTH = 2; // log2(4)
+    localparam INDEX_WIDTH = $clog2(SETS);              // 自动计算：log2(SETS)
+    localparam OFFSET_WIDTH = $clog2(LINE_SIZE);        // log2(16) = 4
+    localparam TAG_WIDTH = 32 - INDEX_WIDTH - OFFSET_WIDTH;  // 自动计算
+    localparam WORD_OFFSET_WIDTH = $clog2(WORDS_PER_LINE);   // log2(4) = 2
 
     // L0 Cache Parameters (1KB = 64 sets * 16 bytes)
     localparam L0_SETS = 64;
-    localparam L0_INDEX_WIDTH = 6; // log2(64)
-    localparam L0_TAG_WIDTH = 32 - 4 - L0_INDEX_WIDTH; // 32 - 4 - 6 = 22
+    localparam L0_INDEX_WIDTH = $clog2(L0_SETS);        // log2(64) = 6
+    localparam L0_TAG_WIDTH = 32 - OFFSET_WIDTH - L0_INDEX_WIDTH;
     
     // Address breakdown (combinational from current PC)
     logic [TAG_WIDTH-1:0]        tag;
     logic [INDEX_WIDTH-1:0]      index;
     logic [WORD_OFFSET_WIDTH-1:0] word_offset;
     
-    assign tag = pc_i[31:13];
-    assign index = pc_i[12:4];
-    assign word_offset = pc_i[3:2];
+    // 使用参数化的位选择
+    assign tag = pc_i[31 : INDEX_WIDTH + OFFSET_WIDTH];
+    assign index = pc_i[INDEX_WIDTH + OFFSET_WIDTH - 1 : OFFSET_WIDTH];
+    assign word_offset = pc_i[OFFSET_WIDTH - 1 : 2];
     
     // Cache storage - BRAM arrays
     // Data BRAM: 4 ways × 256 sets × 128 bits (4 words)
@@ -107,8 +108,8 @@ module icache (
     logic l0_hit;
     logic [127:0] l0_hit_data;
 
-    assign l0_index = pc_i[9:4];
-    assign l0_tag_req = pc_i[31:10];
+    assign l0_index = pc_i[L0_INDEX_WIDTH + OFFSET_WIDTH - 1 : OFFSET_WIDTH];
+    assign l0_tag_req = pc_i[31 : L0_INDEX_WIDTH + OFFSET_WIDTH];
 
     // L0 Hit Detection (Combinational)
     always_comb begin
