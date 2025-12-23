@@ -61,13 +61,16 @@ module uart_model #(
 
   always begin
     wait (rxd_data_ready == 1);
+    /*
     $write("[%0t]: uart received 0x%02x", $time, rxd_data);
     
     if (rxd_data >= 8'h21 && rxd_data <= 8'h7E)
       $write(", ASCII: %c\n", rxd_data);
     else
       $write("\n");
-    
+    */
+    $write("%c", rxd_data);
+
     @(posedge uart_clk);
     rxd_clear = 1;
     @(posedge uart_clk);

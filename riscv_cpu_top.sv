@@ -597,8 +597,14 @@ module riscv_cpu_top (
     logic [31:0] mtvec_out;
     logic [31:0] mepc_out;
     logic [31:0] sepc_out;     // SRET 返回地址
+    logic [31:0] stvec_out;    // S-mode trap vector
+    logic        trap_to_s;   // Trap delegation to S-mode
     logic        mie_mtie;
     logic        mstatus_mie;
+    logic        mie_stie;      // S-mode timer interrupt enable
+    logic        mip_stip;      // S-mode timer interrupt pending
+    logic        sstatus_sie;   // S-mode global interrupt enable
+    logic        mstatus_sum;   // Supervisor User Memory access
     logic [1:0]  priv_mode;
     
     // PMP 配置输出
@@ -643,6 +649,7 @@ module riscv_cpu_top (
         .sfence_flush_all(sfence_flush_all),
         .sfence_flush_vpn(sfence_flush_vpn),
         .sfence_flush_vpn_addr(sfence_flush_vpn_addr),
+        .mstatus_sum    (mstatus_sum),
         
         // PTW Interface
         .immu_ptw_addr  (immu_ptw_addr),
@@ -728,18 +735,37 @@ module riscv_cpu_top (
     logic exception_trigger;
     assign exception_trigger = ex_ecall || ex_ebreak || ex_illegal || ex_branch_misalign;
     
-    // ========== Timer 中断检测 ==========
-    // Timer 中断待处理条件:
+    // ========== M-mode Timer 中断检测 ==========
+    // M-mode Timer 中断待处理条件:
     // 1. mip.MTIP (timer_interrupt from CLINT)
     // 2. mie.MTIE (timer interrupt enable)
     // 3. 中断使能检查 (取决于当前特权级):
     //    - 在 M-mode: 需要 mstatus.MIE = 1
     //    - 在 U/S-mode: M-mode 中断总是使能 (不检查 mstatus.MIE)
-    logic mie_enabled;
-    assign mie_enabled = (priv_mode != PRIV_M) || mstatus_mie;
+    logic m_int_enabled;
+    assign m_int_enabled = (priv_mode != PRIV_M) || mstatus_mie;
     
+    logic m_timer_int_pending;
+    assign m_timer_int_pending = timer_interrupt && mie_mtie && m_int_enabled;
+    
+    // ========== S-mode Timer 中断检测 ==========
+    // S-mode Timer 中断待处理条件:
+    // 1. mip.STIP (software-set by M-mode handler)
+    // 2. mie.STIE (S-mode timer interrupt enable)
+    // 3. 中断使能检查:
+    //    - 在 U-mode: S-mode 中断总是使能
+    //    - 在 S-mode: 需要 sstatus.SIE = 1
+    //    - 在 M-mode: S-mode 中断不发生
+    logic s_int_enabled;
+    assign s_int_enabled = (priv_mode == PRIV_U) || (priv_mode == PRIV_S && sstatus_sie);
+    
+    logic s_timer_int_pending;
+    assign s_timer_int_pending = mip_stip && mie_stie && s_int_enabled;
+    
+    // 中断触发:
+    // M-mode 中断优先级高于 S-mode 中断
     logic timer_int_pending;
-    assign timer_int_pending = timer_interrupt && mie_mtie && mie_enabled;
+    assign timer_int_pending = m_timer_int_pending || s_timer_int_pending;
     
     // 中断触发条件:
     // 1. 有中断待处理
@@ -772,8 +798,12 @@ module riscv_cpu_top (
             // IF Stage Fault (propagated)
             trap_cause = id_ex_reg.exception_cause;
         end else if (interrupt_trigger) begin
-            // Timer 中断
-            trap_cause = INT_M_TIMER;  // 32'h80000007
+            // Timer 中断 - M-mode优先级高于S-mode
+            if (m_timer_int_pending) begin
+                trap_cause = INT_M_TIMER;  // 32'h80000007
+            end else begin
+                trap_cause = INT_S_TIMER;  // 32'h80000005
+            end
         end else if (ex_illegal) begin
             // 非法指令异常
             trap_cause = EX_ILLEGAL_INST;  // 32'd2
@@ -816,20 +846,24 @@ module riscv_cpu_top (
     end
     
     // ========== 向量化中断支持 ==========
-    // mtvec[1:0] = MODE: 00=Direct, 01=Vectored
-    // Direct: 所有 trap 跳转到 mtvec.BASE
-    // Vectored: 中断跳转到 mtvec.BASE + 4*cause, 异常跳转到 mtvec.BASE
+    // mtvec/stvec[1:0] = MODE: 00=Direct, 01=Vectored
+    // Direct: 所有 trap 跳转到 BASE
+    // Vectored: 中断跳转到 BASE + 4*cause, 异常跳转到 BASE
     logic [31:0] trap_vector_addr;
-    logic [1:0] mtvec_mode;
-    assign mtvec_mode = mtvec_out[1:0];
+    logic [31:0] active_tvec;
+    logic [1:0] tvec_mode;
+    
+    // 根据 trap_to_s 选择 mtvec 或 stvec
+    assign active_tvec = trap_to_s ? stvec_out : mtvec_out;
+    assign tvec_mode = active_tvec[1:0];
     
     always_comb begin
-        if (interrupt_trigger && mtvec_mode == 2'b01) begin
+        if (interrupt_trigger && tvec_mode == 2'b01) begin
             // Vectored mode for interrupts: BASE + 4 * cause (低7位)
-            trap_vector_addr = {mtvec_out[31:2], 2'b00} + {25'b0, trap_cause[6:0], 2'b00};
+            trap_vector_addr = {active_tvec[31:2], 2'b00} + {25'b0, trap_cause[6:0], 2'b00};
         end else begin
             // Direct mode or exception: 跳转到 BASE
-            trap_vector_addr = {mtvec_out[31:2], 2'b00};
+            trap_vector_addr = {active_tvec[31:2], 2'b00};
         end
     end
     
@@ -880,6 +914,10 @@ module riscv_cpu_top (
         // 中断输出
         .mie_mtie       (mie_mtie),
         .mstatus_mie    (mstatus_mie),
+        .mie_stie       (mie_stie),
+        .mip_stip       (mip_stip),
+        .sstatus_sie    (sstatus_sie),
+        .mstatus_sum    (mstatus_sum),
         .priv_mode      (priv_mode),
         // PMP 输出
         .pmpcfg0_out    (pmpcfg0_out),
@@ -888,7 +926,11 @@ module riscv_cpu_top (
         .satp_out       (satp_out),
         .paging_enabled (paging_enabled),
         // sepc 输出 (SRET)
-        .sepc_out       (sepc_out)
+        .sepc_out       (sepc_out),
+        // stvec 输出 (S-mode trap)
+        .stvec_out      (stvec_out),
+        // 异常委托信号
+        .trap_to_s      (trap_to_s)
     );
     
     // ==================== MMU & PTW Signals ====================
@@ -971,6 +1013,7 @@ module riscv_cpu_top (
         .satp(satp_out),
         .paging_enabled(paging_enabled),
         .priv_mode(priv_mode),
+        .mstatus_sum(mstatus_sum),
         
         .vaddr(mem_vaddr),
         .translate_req(mem_req_valid), // Only translate if request is valid

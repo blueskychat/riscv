@@ -98,6 +98,11 @@ module id_stage (
         if (rst) begin
             for (int i = 0; i < 32; i++)
                 reg_file[i] <= 32'h0;
+            // Initialize boot convention registers:
+            // a0 (x10) = hartid = 0
+            // a1 (x11) = DTB address = 0x87e00000
+            //reg_file[10] <= 32'h0;         // a0 = hartid
+            //reg_file[11] <= 32'h87e00000;  // a1 = dtb address
         end else if (wb_enable && wb_rd != 5'h0) begin
             reg_file[wb_rd] <= reg_write_data;
         end

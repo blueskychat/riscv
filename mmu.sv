@@ -10,6 +10,7 @@ module mmu (
     input  wire logic [31:0] satp,              // satp CSR value
     input  wire logic        paging_enabled,    // satp.MODE == 1
     input  wire logic [1:0]  priv_mode,         // Current privilege mode
+    input  wire logic        mstatus_sum,       // Supervisor User Memory access bit
     
     // 翻译请求接口
     input  wire logic [31:0] vaddr,             // Virtual address to translate
@@ -83,6 +84,7 @@ module mmu (
     logic        saved_is_write;
     logic        saved_is_execute;
     logic [1:0]  saved_priv_mode;   // Saved privilege mode for PTW
+    logic        saved_mstatus_sum; // Saved SUM bit for PTW
     logic [31:0] pte_reg;           // Current PTE (used for Level 2 address calculation)
     wire [21:0] ppn = pte_reg[31:10];  // Physical Page Number from PTE
     
@@ -102,6 +104,7 @@ module mmu (
             saved_is_write <= 1'b0;
             saved_is_execute <= 1'b0;
             saved_priv_mode <= 2'b11;  // Default to M-mode
+            saved_mstatus_sum <= 1'b0;
             pte_reg <= 32'h0;
 
         end else begin
@@ -116,6 +119,7 @@ module mmu (
                             saved_is_write <= is_write;
                             saved_is_execute <= is_execute;
                             saved_priv_mode <= priv_mode;
+                            saved_mstatus_sum <= mstatus_sum;
                         end
                     end
                 end
@@ -143,7 +147,8 @@ module mmu (
         input logic [31:0] pte,
         input logic [1:0]  priv,
         input logic        is_wr,
-        input logic        is_exec
+        input logic        is_exec,
+        input logic        sum_bit
     );
         logic ok;
         ok = 1'b1;
@@ -153,8 +158,16 @@ module mmu (
             ok = 1'b0;
         
         // Check U bit (user mode access)
+        // U-mode can only access U pages
         if (priv == PRIV_U && !pte[PTE_U])
             ok = 1'b0;
+        
+        // S-mode accessing U pages requires SUM=1
+        // Note: S-mode cannot execute from U pages regardless of SUM
+        if (priv == PRIV_S && pte[PTE_U]) begin
+            if (!sum_bit || is_exec)
+                ok = 1'b0;
+        end
         
         // Check read permission (Load)
         if (!is_wr && !is_exec && !pte[PTE_R])
@@ -221,8 +234,15 @@ module mmu (
                 tlb_perm_ok = 1'b0;
             
             // Check User bit
+            // U-mode can only access U pages
             if (priv_mode == PRIV_U && !tlb_perm[3]) // User bit is at index 3 in {D,A,G,U,X,W,R}
                 tlb_perm_ok = 1'b0;
+            
+            // S-mode accessing U pages requires SUM=1 and cannot be execute
+            if (priv_mode == PRIV_S && tlb_perm[3]) begin // U bit is at index 3
+                if (!mstatus_sum || is_execute)
+                    tlb_perm_ok = 1'b0;
+            end
             
             // Check Read
             if (!is_write && !is_execute && !tlb_perm[0]) // Read bit is at index 0
@@ -302,7 +322,7 @@ module mmu (
                         if (ptw_data[19:10] != 10'b0) begin
                             // 超级页未对齐 -> page fault
                             next_state = FAULT;
-                        end else if (!check_pte_perm(ptw_data, saved_priv_mode, saved_is_write, saved_is_execute)) begin
+                        end else if (!check_pte_perm(ptw_data, saved_priv_mode, saved_is_write, saved_is_execute, saved_mstatus_sum)) begin
                             // 权限检查失败
                             next_state = FAULT;
                         end else begin
@@ -340,7 +360,7 @@ module mmu (
                     end else if (!(ptw_data[PTE_R] | ptw_data[PTE_X])) begin
                         // 二级 PTE 必须是叶子
                         next_state = FAULT;
-                    end else if (!check_pte_perm(ptw_data, saved_priv_mode, saved_is_write, saved_is_execute)) begin
+                    end else if (!check_pte_perm(ptw_data, saved_priv_mode, saved_is_write, saved_is_execute, saved_mstatus_sum)) begin
                         // 权限检查失败
                         next_state = FAULT;
                     end else begin

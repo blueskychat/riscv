@@ -68,7 +68,7 @@ module dcache (
     // L2 Cache Parameters (Phase 4)
     // ========================================================================
     // L2_SETS can be 256 (16KB) or 512 (32KB) - other params auto-computed
-    localparam L2_SETS = 512;
+    localparam L2_SETS = 256;
     localparam L2_WAYS = 4;
     localparam L2_LINE_SIZE = 16;       // 16 bytes = 4 words
     localparam L2_OFFSET_WIDTH = 4;     // log2(16) = 4

@@ -33,6 +33,7 @@ module if_stage (
     input  wire logic        sfence_flush_all,
     input  wire logic        sfence_flush_vpn,
     input  wire logic [19:0] sfence_flush_vpn_addr,
+    input  wire logic        mstatus_sum,       // Supervisor User Memory access (unused for execute, but needed for MMU interface)
     
     // IMMU PTW Interface
     output logic [31:0]      immu_ptw_addr,
@@ -161,6 +162,7 @@ module if_stage (
         .satp(satp),
         .paging_enabled(paging_enabled),
         .priv_mode(priv_mode),
+        .mstatus_sum(mstatus_sum),
         
         .vaddr(pc),
         .translate_req(!rst), 

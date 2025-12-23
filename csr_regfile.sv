@@ -29,8 +29,12 @@ module csr_regfile (
     input  wire logic [63:0] mtime_i,         // mtime 值 (Zicntr: time/timeh CSR)
     
     // 中断使能输出
-    output logic             mie_mtie,      // Timer 中断使能
-    output logic             mstatus_mie,   // 全局中断使能
+    output logic             mie_mtie,      // M-mode Timer 中断使能
+    output logic             mstatus_mie,   // M-mode 全局中断使能
+    output logic             mie_stie,      // S-mode Timer 中断使能
+    output logic             mip_stip,      // S-mode Timer 中断 pending
+    output logic             sstatus_sie,   // S-mode 全局中断使能
+    output logic             mstatus_sum,   // Supervisor User Memory access
     
     // 当前特权模式
     output logic [1:0]       priv_mode,     // 当前特权级
@@ -44,7 +48,13 @@ module csr_regfile (
     output logic             paging_enabled, // 分页是否启用 (satp.MODE == 1)
     
     // sepc 输出 (用于 SRET)
-    output logic [31:0]      sepc_out       // sepc 输出 (S-mode 异常返回地址)
+    output logic [31:0]      sepc_out,      // sepc 输出 (S-mode 异常返回地址)
+    
+    // stvec 输出 (用于 S-mode 异常入口)
+    output logic [31:0]      stvec_out,     // stvec 输出 (S-mode 异常入口地址)
+    
+    // 异常委托输出 (用于确定 trap 目标模式)
+    output logic             trap_to_s      // 1 = trap 到 S-mode, 0 = trap 到 M-mode
 );
 
     // ==================== CSR 寄存器 ====================
@@ -88,6 +98,10 @@ module csr_regfile (
     assign mepc_out = mepc;
     assign mie_mtie = mie[MIE_MTIE_BIT];
     assign mstatus_mie = mstatus[MSTATUS_MIE_BIT];
+    assign mie_stie = mie[MIE_STIE_BIT];
+    assign mip_stip = mip[MIP_STIP_BIT];
+    assign sstatus_sie = sstatus[SSTATUS_SIE_BIT];
+    assign mstatus_sum = mstatus[MSTATUS_SUM_BIT];
     assign priv_mode = current_priv;
     
     // PMP 输出
@@ -100,6 +114,27 @@ module csr_regfile (
     
     // sepc 输出 (SRET)
     assign sepc_out = sepc;
+    
+    // stvec 输出 (S-mode trap)
+    assign stvec_out = stvec;
+    
+    // ==================== 异常委托逻辑 ====================
+    // 决定 trap 应该进入 M-mode 还是 S-mode
+    // 条件: 1) 异常/中断已委托, 2) 当前模式 <= S-mode
+    
+    // 提取 cause code (去掉最高位的中断标志)
+    wire [4:0] trap_cause_code = trap_cause[4:0];
+    wire       trap_is_interrupt = trap_cause[31];
+    
+    // 检查委托寄存器中对应的位
+    wire trap_delegated = trap_is_interrupt ? 
+                          mideleg[trap_cause_code] :  // 中断委托
+                          medeleg[trap_cause_code];   // 异常委托
+    
+    // trap_to_s: 委托给 S-mode 的条件
+    // 1. 异常/中断被委托 (medeleg/mideleg 对应位为 1)
+    // 2. 当前不在 M-mode (M-mode 的 trap 永远不会委托)
+    assign trap_to_s = trap_delegated && (current_priv != PRIV_M);
     
     // ==================== CSR 读取逻辑 ====================
     
@@ -163,7 +198,7 @@ module csr_regfile (
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             // 复位值
-            mstatus   <= 32'h0000_1800;  // MPP = M-mode (11)
+            mstatus   <= 32'h0000_0000;  // MPP = U-mode (00), allows bootloader to set MPP=S correctly
             mie       <= 32'h0;
             mtvec     <= 32'h0;
             mscratch  <= 32'h0;
@@ -187,19 +222,37 @@ module csr_regfile (
             
         end else if (trap_enter) begin
             // ========== 进入异常/中断 ==========
-            // 保存当前 PC 到 mepc
-            mepc <= trap_pc;
-            // 保存异常原因到 mcause
-            mcause <= trap_cause;
-            // 保存异常值到 mtval
-            mtval <= trap_val;
-            // 保存当前 MIE 到 MPIE，清除 MIE
-            mstatus[MSTATUS_MPIE_BIT] <= mstatus[MSTATUS_MIE_BIT];
-            mstatus[MSTATUS_MIE_BIT] <= 1'b0;
-            // 保存当前特权级到 MPP
-            mstatus[MSTATUS_MPP_HI:MSTATUS_MPP_LO] <= current_priv;
-            // 切换到 M 模式
-            current_priv <= PRIV_M;
+            if (trap_to_s) begin
+                // ========== Trap 到 S-mode (委托的异常/中断) ==========
+                // 保存当前 PC 到 sepc
+                sepc <= trap_pc;
+                // 保存异常原因到 scause
+                scause <= trap_cause;
+                // 保存异常值到 stval
+                stval <= trap_val;
+                // 保存当前 SIE 到 SPIE，清除 SIE
+                sstatus[SSTATUS_SPIE_BIT] <= sstatus[SSTATUS_SIE_BIT];
+                sstatus[SSTATUS_SIE_BIT] <= 1'b0;
+                // 保存当前特权级到 SPP (1 bit: 0=U, 1=S)
+                sstatus[SSTATUS_SPP_BIT] <= current_priv[0];
+                // 切换到 S 模式
+                current_priv <= PRIV_S;
+            end else begin
+                // ========== Trap 到 M-mode (未委托的异常/中断) ==========
+                // 保存当前 PC 到 mepc
+                mepc <= trap_pc;
+                // 保存异常原因到 mcause
+                mcause <= trap_cause;
+                // 保存异常值到 mtval
+                mtval <= trap_val;
+                // 保存当前 MIE 到 MPIE，清除 MIE
+                mstatus[MSTATUS_MPIE_BIT] <= mstatus[MSTATUS_MIE_BIT];
+                mstatus[MSTATUS_MIE_BIT] <= 1'b0;
+                // 保存当前特权级到 MPP
+                mstatus[MSTATUS_MPP_HI:MSTATUS_MPP_LO] <= current_priv;
+                // 切换到 M 模式
+                current_priv <= PRIV_M;
+            end
             
         end else if (mret_exec) begin
             // ========== mret 返回 ==========
@@ -231,6 +284,7 @@ module csr_regfile (
                     mstatus[MSTATUS_MIE_BIT]  <= csr_new_value[MSTATUS_MIE_BIT];
                     mstatus[MSTATUS_MPIE_BIT] <= csr_new_value[MSTATUS_MPIE_BIT];
                     mstatus[MSTATUS_MPP_HI:MSTATUS_MPP_LO] <= csr_new_value[MSTATUS_MPP_HI:MSTATUS_MPP_LO];
+                    mstatus[MSTATUS_SUM_BIT]  <= csr_new_value[MSTATUS_SUM_BIT];
                 end
                 CSR_MIE:      mie <= csr_new_value;
                 CSR_MTVEC:    mtvec <= csr_new_value;  // 保留 MODE 位 (bits 0-1)
@@ -254,6 +308,8 @@ module csr_regfile (
                     sstatus[SSTATUS_SIE_BIT]  <= csr_new_value[SSTATUS_SIE_BIT];
                     sstatus[SSTATUS_SPIE_BIT] <= csr_new_value[SSTATUS_SPIE_BIT];
                     sstatus[SSTATUS_SPP_BIT]  <= csr_new_value[SSTATUS_SPP_BIT];
+                    // SUM 位同步到 mstatus (sstatus 是 mstatus 的子集视图)
+                    mstatus[MSTATUS_SUM_BIT]  <= csr_new_value[SSTATUS_SUM_BIT];
                 end
                 CSR_SIE:      begin
                     // sie 写入实际影响 mie 的 S 模式位

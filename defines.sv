@@ -111,6 +111,7 @@ parameter CSR_SIP       = 12'h144;  // Supervisor Interrupt Pending
 parameter SSTATUS_SIE_BIT  = 1;   // Supervisor Interrupt Enable
 parameter SSTATUS_SPIE_BIT = 5;   // Supervisor Previous Interrupt Enable
 parameter SSTATUS_SPP_BIT  = 8;   // Supervisor Previous Privilege (1 bit: 0=U, 1=S)
+parameter SSTATUS_SUM_BIT  = 18;  // Supervisor User Memory access
 
 // Zicntr 扩展: 用户模式只读时间计数器
 parameter CSR_TIME      = 12'hC01;  // time: mtime 低32位 (只读)
@@ -153,6 +154,7 @@ parameter MSTATUS_MIE_BIT     = 3;   // Machine Interrupt Enable
 parameter MSTATUS_MPIE_BIT    = 7;   // Machine Previous Interrupt Enable
 parameter MSTATUS_MPP_LO      = 11;  // Machine Previous Privilege (低位)
 parameter MSTATUS_MPP_HI      = 12;  // Machine Previous Privilege (高位)
+parameter MSTATUS_SUM_BIT     = 18;  // Supervisor User Memory access (S-mode can access U-mode pages)
 
 // mie 字段定义
 parameter MIE_SSIE_BIT        = 1;   // Supervisor Software Interrupt Enable

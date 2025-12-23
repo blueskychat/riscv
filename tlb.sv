@@ -4,8 +4,8 @@
 // Simplified version with unpacked struct arrays
 
 module tlb #(
-    parameter ENTRIES = 16,
-    parameter INDEX_WIDTH = 4  // log2(16)
+    parameter ENTRIES = 8,
+    parameter INDEX_WIDTH = 3  // log2(8)
 ) (
     input  wire logic        clk,
     input  wire logic        rst,

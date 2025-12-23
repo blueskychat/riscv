@@ -25,8 +25,8 @@ module testbench;
     wire rxd;
     logic txd;
     // Windows 需要注意路径分隔符的转义，例如 "D:\\foo\\bar.bin"
-    parameter BASE_RAM_INIT_FILE = "kernel.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
-    parameter EXT_RAM_INIT_FILE = "extram.bin";  // ExtRAM 初始化文件，请修改为实际的绝对路径
+    parameter BASE_RAM_INIT_FILE = "rbl.img"; //"kernel.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
+    parameter EXT_RAM_INIT_FILE = "ucore.img";//"extram.bin";  // ExtRAM 初始化文件，请修改为实际的绝对路径
 
     // CPU实例
     riscv_cpu_top dut (
@@ -376,7 +376,7 @@ module testbench;
                      byte_cnt++, (word_addr << 2), word_data);
         end
         */
-        #5000000   // Reduced timeout for faster testing
+        #500000000   // Reduced timeout for faster testing
 
         $finish;
     end

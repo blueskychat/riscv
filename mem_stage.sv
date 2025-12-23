@@ -151,12 +151,14 @@ module mem_stage (
     
     always_comb begin
         cpu_mem_adr = ex_mem_reg.alu_result;
-        cpu_mem_dat_o = ex_mem_reg.rs2_data;
         cpu_mem_we = ex_mem_reg.mem_write;
         
-        // 字节选择信号
+        // Store data alignment - replicate byte/half to all lanes
+        // The byte-enable (cpu_mem_sel) selects which lane is actually written
         case (ex_mem_reg.mem_width)
             MEM_BYTE: begin
+                // Replicate byte to all 4 positions
+                cpu_mem_dat_o = {4{ex_mem_reg.rs2_data[7:0]}};
                 case (ex_mem_reg.alu_result[1:0])
                     2'b00: cpu_mem_sel = 4'b0001;
                     2'b01: cpu_mem_sel = 4'b0010;
@@ -165,12 +167,18 @@ module mem_stage (
                 endcase
             end
             MEM_HALF: begin
+                // Replicate half to both positions
+                cpu_mem_dat_o = {2{ex_mem_reg.rs2_data[15:0]}};
                 cpu_mem_sel = ex_mem_reg.alu_result[1] ? 4'b1100 : 4'b0011;
             end
             MEM_WORD: begin
+                cpu_mem_dat_o = ex_mem_reg.rs2_data;
                 cpu_mem_sel = 4'b1111;
             end
-            default: cpu_mem_sel = 4'b1111;
+            default: begin
+                cpu_mem_dat_o = ex_mem_reg.rs2_data;
+                cpu_mem_sel = 4'b1111;
+            end
         endcase
         
    end
