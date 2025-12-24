@@ -95,7 +95,7 @@ module uart_model #(
     forever begin
       #1000000;  // 1ms interval
       
-      uart_fd = $fopen("uart_input.bin", "rb");
+      uart_fd = $fopen("D:\\sqw\\code\\verilogtest\\riscv\\riscv.srcs\\uart_input.bin", "rb");
       if (uart_fd != 0) begin
         // Skip already-read characters
         done = 0;

@@ -25,8 +25,8 @@ module testbench;
     wire rxd;
     logic txd;
     // Windows 需要注意路径分隔符的转义，例如 "D:\\foo\\bar.bin"
-    parameter BASE_RAM_INIT_FILE = "rbl.img"; //"kernel.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
-    parameter EXT_RAM_INIT_FILE = "ucore.img";//"extram.bin";  // ExtRAM 初始化文件，请修改为实际的绝对路径
+    parameter BASE_RAM_INIT_FILE = "D:\\sqw\\code\\verilogtest\\riscv\\riscv.srcs\\rbl.img"; //"kernel.bin"; // BaseRAM 初始化文件，请修改为实际的绝对路径
+    parameter EXT_RAM_INIT_FILE = "D:\\sqw\\code\\verilogtest\\riscv\\riscv.srcs\\ucore.img";//"extram.bin";  // ExtRAM 初始化文件，请修改为实际的绝对路径
 
     // CPU实例
     riscv_cpu_top dut (
@@ -397,6 +397,9 @@ module testbench;
     /*
     // Counter for detecting stuck loops
     integer trap_count = 0;
+    integer s_ecall_count = 0;
+    logic [31:0] last_ecall_pc = 32'h0;
+    integer same_ecall_pc_count = 0;
     logic [31:0] last_trap_cause = 32'h0;
     integer same_trap_count = 0;
     
@@ -405,40 +408,58 @@ module testbench;
         if (dut.trap_enter) begin
             trap_count = trap_count + 1;
             
-            // Only print non-ecall traps to reduce noise (ecalls are normal SBI output)
-            // cause 0x8 = ecall from U-mode, 0x9 = ecall from S-mode
-            if (dut.trap_cause != 32'h00000008 && dut.trap_cause != 32'h00000009) begin
-                $display("[%0t] TRAP ENTER #%0d: cause=0x%08h pc=0x%08h val=0x%08h priv=%0d to_s=%0d sscratch=0x%08h",
+            // Show S-mode ecalls (to understand the loop)
+            if (dut.trap_cause == 32'h00000009) begin
+                s_ecall_count = s_ecall_count + 1;
+                
+                // Check if same PC is calling ecall repeatedly
+                if (dut.trap_pc == last_ecall_pc) begin
+                    same_ecall_pc_count = same_ecall_pc_count + 1;
+                end else begin
+                    // New ecall PC, reset counter and show it
+                    if (same_ecall_pc_count > 0) begin
+                        $display("[S-ECALL] PC=0x%08h repeated %0d times", last_ecall_pc, same_ecall_pc_count);
+                    end
+                    same_ecall_pc_count = 1;
+                    last_ecall_pc = dut.trap_pc;
+                    $display("[%0t] S-MODE ECALL from NEW PC=0x%08h (total#%0d)", $time, dut.trap_pc, s_ecall_count);
+                end
+                
+                // Stop if same ecall PC repeats too many times without progress
+                if (same_ecall_pc_count >= 100000) begin
+                    $display("[%0t] ERROR: S-MODE ECALL stuck at PC=0x%08h for %0d times!", $time, dut.trap_pc, same_ecall_pc_count);
+                    $display("       Total traps: %0d, S-mode ecalls: %0d", trap_count, s_ecall_count);
+                    $display("       Current priv: %0d, sscratch: 0x%08h", dut.priv_mode, dut.u_csr.sscratch);
+                    $finish;
+                end
+            end
+            // Check for page fault (cause 0xc, 0xd, 0xf)
+            else if (dut.trap_cause == 32'h0000000c || dut.trap_cause == 32'h0000000d || dut.trap_cause == 32'h0000000f) begin
+                $display("[%0t] PAGE FAULT #%0d:", $time, trap_count);
+                $display("       cause=0x%08h (%s)", dut.trap_cause, 
+                         dut.trap_cause == 32'hc ? "Inst PF" : (dut.trap_cause == 32'hd ? "Load PF" : "Store PF"));
+                $display("       pc=0x%08h val=0x%08h", dut.trap_pc, dut.trap_val);
+                $display("       priv=%0d to_s=%0d", dut.priv_mode, dut.trap_to_s);
+                $display("       sscratch=0x%08h", dut.u_csr.sscratch);
+                $display("       sepc=0x%08h scause=0x%08h", dut.u_csr.sepc, dut.u_csr.scause);
+                
+                // Stop on page fault at __alltraps entry
+                if (dut.trap_pc >= 32'h80401694 && dut.trap_pc <= 32'h80401750) begin
+                    $display("[%0t] ERROR: Page fault inside __alltraps! This indicates sp corruption.", $time);
+                    $display("       sscratch at trap entry should be 0 for S-mode or kernel_sp for U-mode.");
+                    $finish;
+                end
+            end
+            // Show all non-ecall traps (skip timer interrupts which are very frequent)
+            else if (dut.trap_cause != 32'h00000008 && dut.trap_cause != 32'h80000007 && dut.trap_cause != 32'h80000005) begin
+                $display("[%0t] TRAP #%0d: cause=0x%08h pc=0x%08h val=0x%08h priv=%0d to_s=%0d sscratch=0x%08h",
                          $time, trap_count, 
                          dut.trap_cause, 
                          dut.trap_pc, 
                          dut.trap_val,
                          dut.priv_mode,
                          dut.trap_to_s,
-                         dut.u_csr.sscratch);  // Show sscratch value!
-            end
-            
-            // Track if same trap is repeating (indicates stuck loop)
-            // IGNORE ecalls (0x8, 0x9) since they are normal SBI console output
-            if (dut.trap_cause != 32'h00000008 && dut.trap_cause != 32'h00000009) begin
-                if (dut.trap_cause == last_trap_cause) begin
-                    same_trap_count = same_trap_count + 1;
-                    if (same_trap_count >= 5) begin
-                        $display("[%0t] WARNING: Same trap cause 0x%08h repeated %0d times!",
-                                 $time, dut.trap_cause, same_trap_count);
-                    end
-                    // Stop on repeated timer interrupts or other traps (not ecalls)
-                    if (same_trap_count >= 20) begin
-                        $display("[%0t] ERROR: Trap loop detected! Stopping simulation.", $time);
-                        $display("       Trap cause: 0x%08h", dut.trap_cause);
-                        $display("       Trap PC:    0x%08h", dut.trap_pc);
-                        $display("       Priv mode:  %0d", dut.priv_mode);
-                        $finish;
-                    end
-                end else begin
-                    same_trap_count = 0;
-                    last_trap_cause = dut.trap_cause;
-                end
+                         dut.u_csr.sscratch);
             end
         end
     end
@@ -471,6 +492,11 @@ module testbench;
             $display("[%0t] MRET executed: returning to PC=0x%08h, new_priv=%0d",
                      $time, dut.mepc_out, dut.u_csr.mstatus[12:11]);
         end
+        // Debug: Check if ex_sret is ever asserted
+        if (dut.ex_sret) begin
+            $display("[%0t] ex_sret ASSERTED: mem_stall=%0d, sret_exec will be %0d",
+                     $time, dut.mem_stall, dut.ex_sret && !dut.mem_stall);
+        end
         if (dut.u_csr.sret_exec) begin
             sret_count = sret_count + 1;
             // Show more detail: sepc, SPP before SRET
@@ -479,9 +505,8 @@ module testbench;
                      dut.u_csr.sstatus[8] ? 1 : 0);
         end
     end
-    */
 
-    /*
+
     // ============================================================================
     // Critical: Monitor privilege mode transitions
     // ============================================================================
