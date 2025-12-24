@@ -778,9 +778,38 @@ module riscv_cpu_top (
                               !exception_trigger && 
                               !mem_stall;
     
-    // DMMU Page Fault (at MEM stage)
+    // ========== DMMU Page Fault Latch ==========
+    // CRITICAL FIX: The DMMU page fault signal is only high for 1 cycle.
+    // If the pipeline is stalled (e.g., IMMU doing PTW) during that cycle,
+    // the trap_enter signal is masked by !mem_stall, causing the page fault to be lost.
+    // Solution: Latch the page fault and associated data until trap is taken.
+    
+    logic dmmu_page_fault_latched;
+    logic [3:0] dmmu_fault_type_latched;
+    logic [31:0] dmmu_fault_vaddr_latched;
+    logic [31:0] dmmu_fault_pc_latched;
+    
+    always_ff @(posedge sys_clk or posedge sys_rst) begin
+        if (sys_rst) begin
+            dmmu_page_fault_latched <= 1'b0;
+            dmmu_fault_type_latched <= 4'h0;
+            dmmu_fault_vaddr_latched <= 32'h0;
+            dmmu_fault_pc_latched <= 32'h0;
+        end else if (dmmu_page_fault && !dmmu_page_fault_latched) begin
+            // Latch new page fault
+            dmmu_page_fault_latched <= 1'b1;
+            dmmu_fault_type_latched <= dmmu_fault_type;
+            dmmu_fault_vaddr_latched <= mem_vaddr;
+            dmmu_fault_pc_latched <= ex_mem_reg.pc;
+        end else if (trap_enter && dmmu_page_fault_latched) begin
+            // Clear latch when trap is taken
+            dmmu_page_fault_latched <= 1'b0;
+        end
+    end
+    
+    // DMMU Page Fault trigger: use latched or immediate signal
     logic mem_exception_trigger;
-    assign mem_exception_trigger = dmmu_page_fault;
+    assign mem_exception_trigger = dmmu_page_fault || dmmu_page_fault_latched;
 
     // ========== Trap 进入信号 ==========
     // 异常或中断触发时进入 trap
@@ -792,8 +821,12 @@ module riscv_cpu_top (
     // 异常: mcause[31] = 0, 低位为异常原因
     always_comb begin
         if (mem_exception_trigger) begin
-            // MEM Stage Page Fault
-            trap_cause = {28'h0, dmmu_fault_type};
+            // MEM Stage Page Fault - use latched values if from latch
+            if (dmmu_page_fault_latched) begin
+                trap_cause = {28'h0, dmmu_fault_type_latched};
+            end else begin
+                trap_cause = {28'h0, dmmu_fault_type};
+            end
         end else if (id_ex_reg.exception_valid) begin
             // IF Stage Fault (propagated)
             trap_cause = id_ex_reg.exception_cause;
@@ -825,15 +858,21 @@ module riscv_cpu_top (
     end
     
     // 异常/中断发生时的 PC
-    // 如果是 MEM 阶段异常，使用 MEM 阶段的 PC
+    // 如果是 MEM 阶段异常，使用 MEM 阶段的 PC (latched or immediate)
     // 否则使用 EX 阶段的 PC (包括 IF 传播来的异常)
-    assign trap_pc = mem_exception_trigger ? ex_mem_reg.pc : id_ex_reg.pc;
+    assign trap_pc = mem_exception_trigger ? 
+                     (dmmu_page_fault_latched ? dmmu_fault_pc_latched : ex_mem_reg.pc) : 
+                     id_ex_reg.pc;
     
     // 异常值 (mtval) - 对于 page fault 为 faulting VA, 其他异常/中断为 0
     always_comb begin
         if (mem_exception_trigger) begin
-            // DMMU page fault: use virtual address from mem_stage
-            trap_val = mem_vaddr;
+            // DMMU page fault: use latched or immediate virtual address
+            if (dmmu_page_fault_latched) begin
+                trap_val = dmmu_fault_vaddr_latched;
+            end else begin
+                trap_val = mem_vaddr;
+            end
         end else if (id_ex_reg.exception_valid) begin
             // IMMU page fault propagated through pipeline: use the faulting PC
             trap_val = id_ex_reg.pc;
