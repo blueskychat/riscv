@@ -381,49 +381,6 @@ module testbench;
         $finish;
     end
     
-    // ============================================================================
-    // Magic Address Monitoring for Test Results
-    // ============================================================================
-    // Monitor writes to magic addresses:
-    // - 0x80300000: Test output marker
-    // - 0x80100000: Halt signal (write 1 to halt simulation)
-    
-    // Watch for writes to output address (0x80300000 = BaseRAM offset 0x300000)
-    // BaseRAM address 0x300000 >> 2 = 0xC0000 (word index)
-    always @(posedge clk_50M) begin
-        // Monitor writes to BaseRAM for magic addresses
-        if (!base_ram_we_n && !base_ram_ce_n) begin
-            // 0x80300000 maps to BaseRAM address 0x300000, word index = 0xC0000
-            if (base_ram_addr == 20'hC0000) begin
-                $display("[%0t] MAGIC OUTPUT @ 0x80300000: 0x%08h", $time, base_ram_data);
-                
-                // Check for special markers
-                if (base_ram_data == 32'hAAAAAAAA) begin
-                    $display("[%0t] *** TEST PASSED ***", $time);
-                    #100;
-                    $finish;
-                end
-                if (base_ram_data == 32'hDEAD0000) begin
-                    $display("[%0t] *** TEST FAILED ***", $time);
-                    #100;
-                    $finish;
-                end
-            end
-            
-            // 0x80100000 maps to BaseRAM address 0x100000, word index = 0x40000
-            if (base_ram_addr == 20'h40000) begin
-                $display("[%0t] HALT SIGNAL @ 0x80100000: 0x%08h", $time, base_ram_data);
-                if (base_ram_data == 32'h00000001) begin
-                    $display("[%0t] Simulation halted by CPU", $time);
-                    #100;
-                    $finish;
-                end
-            end
-        end
-    end
-    
-    // 波形输出
-    
 
     // ============================================================================
     // Debug Monitoring: Trap Handler Entry and PC Loop Detection
@@ -437,6 +394,7 @@ module testbench;
     // Access internal CPU signals via hierarchical path
     // dut is the riscv_cpu_top instance
     
+    /*
     // Counter for detecting stuck loops
     integer trap_count = 0;
     logic [31:0] last_trap_cause = 32'h0;
@@ -484,14 +442,16 @@ module testbench;
             end
         end
     end
-    
+    */
+    /*
     // Monitor PC entering __alltraps (0x80401694)
     always @(posedge clk_50M) begin
         if (dut.pc == 32'h80401694) begin
             $display("[%0t] PC at __alltraps entry, scause pending...", $time);
         end
     end
-    
+    */
+    /*
     // Monitor timer interrupt signals
     logic timer_int_last = 0;
     always @(posedge clk_50M) begin
@@ -501,7 +461,8 @@ module testbench;
         end
         timer_int_last <= dut.timer_interrupt;
     end
-    
+    */
+    /*
     // Monitor mret/sret execution - only show non-SBI-handler returns
     integer sret_count = 0;
     always @(posedge clk_50M) begin
@@ -518,7 +479,9 @@ module testbench;
                      dut.u_csr.sstatus[8] ? 1 : 0);
         end
     end
-    
+    */
+
+    /*
     // ============================================================================
     // Critical: Monitor privilege mode transitions
     // ============================================================================
@@ -544,7 +507,8 @@ module testbench;
             $display("[%0t] U-MODE ECALL #%0d from PC=0x%08h", $time, u_mode_ecall_count, dut.trap_pc);
         end
     end
-    
+    */
+    /*
     // Periodic status report
     integer report_interval = 0;
     always @(posedge clk_50M) begin
@@ -555,7 +519,8 @@ module testbench;
                      $time, u_mode_entry_count, u_mode_ecall_count, sret_count, dut.priv_mode);
         end
     end
-    
+    */
+
     /*
     initial begin
         $dumpfile("cpu.vcd");
