@@ -795,8 +795,9 @@ module riscv_cpu_top (
             dmmu_fault_type_latched <= 4'h0;
             dmmu_fault_vaddr_latched <= 32'h0;
             dmmu_fault_pc_latched <= 32'h0;
-        end else if (dmmu_page_fault && !dmmu_page_fault_latched) begin
-            // Latch new page fault
+        end else if (dmmu_page_fault && !dmmu_page_fault_latched && mem_stall) begin
+            // Only latch if pipeline is stalled and trap can't be taken immediately.
+            // If !mem_stall, trap_enter will fire this cycle and we don't need latch.
             dmmu_page_fault_latched <= 1'b1;
             dmmu_fault_type_latched <= dmmu_fault_type;
             dmmu_fault_vaddr_latched <= mem_vaddr;
@@ -1207,9 +1208,17 @@ module riscv_cpu_top (
             end
 
             // Control for MEM/WB register
+            // CRITICAL: When MEM stage page fault occurs, we must NOT let the faulting
+            // instruction write back to registers. Otherwise, a Load page fault would
+            // corrupt the destination register with garbage data.
+            // NOTE: Only flush for MEM stage faults (mem_exception_trigger), NOT for all
+            // trap_enter - interrupts and EX stage exceptions should allow MEM/WB to complete.
             if (mem_stall) begin
                 // Memory Stall: Freeze
                 mem_wb_reg <= mem_wb_reg;
+            end else if (mem_exception_trigger) begin
+                // MEM stage page fault: Flush MEM/WB to prevent faulting instruction from writing back
+                mem_wb_reg <= '0;
             end else begin
                 // Normal or Flush
                 mem_wb_reg <= flush_mask[3] ? '0 : mem_wb_next;

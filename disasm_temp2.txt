@@ -1,0 +1,49 @@
+
+D:/sqw/code/ucore_os_lab/bin/kernel:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+80401600 <trap+0x48>:
+80401600:	00049c63          	bnez	s1,80401618 <trap+0x60>
+80401604:	05c7a703          	lw	a4,92(a5)
+80401608:	00177713          	andi	a4,a4,1
+8040160c:	06071c63          	bnez	a4,80401684 <trap+0xcc>
+80401610:	0107a783          	lw	a5,16(a5)
+80401614:	04079c63          	bnez	a5,8040166c <trap+0xb4>
+80401618:	00c12083          	lw	ra,12(sp)
+8040161c:	00812403          	lw	s0,8(sp)
+80401620:	00412483          	lw	s1,4(sp)
+80401624:	00012903          	lw	s2,0(sp)
+80401628:	01010113          	addi	sp,sp,16
+8040162c:	00008067          	ret
+80401630:	c01ff0ef          	jal	ra,80401230 <interrupt_handler>
+80401634:	fc5ff06f          	j	804015f8 <trap+0x40>
+80401638:	0006ce63          	bltz	a3,80401654 <trap+0x9c>
+8040163c:	00812403          	lw	s0,8(sp)
+80401640:	00c12083          	lw	ra,12(sp)
+80401644:	00412483          	lw	s1,4(sp)
+80401648:	00012903          	lw	s2,0(sp)
+8040164c:	01010113          	addi	sp,sp,16
+80401650:	d01ff06f          	j	80401350 <exception_handler>
+80401654:	00812403          	lw	s0,8(sp)
+80401658:	00c12083          	lw	ra,12(sp)
+8040165c:	00412483          	lw	s1,4(sp)
+80401660:	00012903          	lw	s2,0(sp)
+80401664:	01010113          	addi	sp,sp,16
+80401668:	bc9ff06f          	j	80401230 <interrupt_handler>
+8040166c:	00812403          	lw	s0,8(sp)
+80401670:	00c12083          	lw	ra,12(sp)
+80401674:	00412483          	lw	s1,4(sp)
+80401678:	00012903          	lw	s2,0(sp)
+8040167c:	01010113          	addi	sp,sp,16
+80401680:	1f50c06f          	j	8040e074 <schedule>
+80401684:	ff700513          	li	a0,-9
+80401688:	1ad070ef          	jal	ra,80409034 <do_exit>
+8040168c:	00042783          	lw	a5,0(s0)
+80401690:	f81ff06f          	j	80401610 <trap+0x58>
+
+80401694 <__alltraps>:
+80401694:	14011173          	csrrw	sp,sscratch,sp
+80401698:	00011463          	bnez	sp,804016a0 <__alltraps+0xc>
+8040169c:	14002173          	csrr	sp,sscratch
