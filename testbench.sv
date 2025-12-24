@@ -450,13 +450,14 @@ module testbench;
             // Only print non-ecall traps to reduce noise (ecalls are normal SBI output)
             // cause 0x8 = ecall from U-mode, 0x9 = ecall from S-mode
             if (dut.trap_cause != 32'h00000008 && dut.trap_cause != 32'h00000009) begin
-                $display("[%0t] TRAP ENTER #%0d: cause=0x%08h pc=0x%08h val=0x%08h priv=%0d to_s=%0d",
+                $display("[%0t] TRAP ENTER #%0d: cause=0x%08h pc=0x%08h val=0x%08h priv=%0d to_s=%0d sscratch=0x%08h",
                          $time, trap_count, 
                          dut.trap_cause, 
                          dut.trap_pc, 
                          dut.trap_val,
                          dut.priv_mode,
-                         dut.trap_to_s);
+                         dut.trap_to_s,
+                         dut.u_csr.sscratch);  // Show sscratch value!
             end
             
             // Track if same trap is repeating (indicates stuck loop)
@@ -511,8 +512,47 @@ module testbench;
         end
         if (dut.u_csr.sret_exec) begin
             sret_count = sret_count + 1;
-            $display("[%0t] SRET #%0d: returning to PC=0x%08h, new_priv=%0d (was S-mode)",
-                     $time, sret_count, dut.sepc_out, dut.u_csr.sstatus[8]);
+            // Show more detail: sepc, SPP before SRET
+            $display("[%0t] SRET #%0d: sepc=0x%08h SPP=%0d -> going to priv=%0d",
+                     $time, sret_count, dut.sepc_out, dut.u_csr.sstatus[8], 
+                     dut.u_csr.sstatus[8] ? 1 : 0);
+        end
+    end
+    
+    // ============================================================================
+    // Critical: Monitor privilege mode transitions
+    // ============================================================================
+    logic [1:0] last_priv = 2'b11;
+    integer u_mode_entry_count = 0;
+    integer u_mode_ecall_count = 0;
+    
+    always @(posedge clk_50M) begin
+        if (dut.priv_mode != last_priv) begin
+            $display("[%0t] PRIVILEGE CHANGE: %0d -> %0d (0=U, 1=S, 3=M) at PC=0x%08h sscratch=0x%08h",
+                     $time, last_priv, dut.priv_mode, dut.pc, dut.u_csr.sscratch);
+            if (dut.priv_mode == 2'b00) begin
+                u_mode_entry_count = u_mode_entry_count + 1;
+                $display("[%0t] *** ENTERED USER MODE *** (entry #%0d) sscratch=0x%08h (should be kernel stack!)",
+                         $time, u_mode_entry_count, dut.u_csr.sscratch);
+            end
+            last_priv <= dut.priv_mode;
+        end
+        
+        // Count U-mode ecalls (cause = 0x8)
+        if (dut.trap_enter && dut.trap_cause == 32'h00000008) begin
+            u_mode_ecall_count = u_mode_ecall_count + 1;
+            $display("[%0t] U-MODE ECALL #%0d from PC=0x%08h", $time, u_mode_ecall_count, dut.trap_pc);
+        end
+    end
+    
+    // Periodic status report
+    integer report_interval = 0;
+    always @(posedge clk_50M) begin
+        report_interval = report_interval + 1;
+        if (report_interval >= 100_000_000) begin  // Every 100M cycles
+            report_interval = 0;
+            $display("[%0t] STATUS: u_mode_entries=%0d, u_mode_ecalls=%0d, sret_count=%0d, priv=%0d",
+                     $time, u_mode_entry_count, u_mode_ecall_count, sret_count, dut.priv_mode);
         end
     end
     
