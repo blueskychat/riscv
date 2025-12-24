@@ -163,13 +163,14 @@ module mmu (
             ok = 1'b0;
         
         // S-mode accessing U pages:
-        // RISC-V spec requires SUM=1 for S-mode to access U pages.
+        // RISC-V spec requires SUM=1 for S-mode to access U pages for read/write.
         // However, ucore never sets SUM bit but creates pages with PTE_U.
-        // For ucore compatibility, we allow S-mode read/write access to U pages
-        // without requiring SUM=1. We still prohibit S-mode execute from U pages
-        // as per RISC-V spec (this is a security feature).
-        if (priv == PRIV_S && pte[PTE_U] && is_exec)
-            ok = 1'b0;
+        // For ucore compatibility, we allow S-mode access to U pages:
+        // - Read/Write: allowed without requiring SUM=1
+        // - Execute: allowed (ucore kernel code may be in U-pages due to shared page table)
+        // NOTE: This differs from strict RISC-V spec which prohibits S-mode execute from U-pages.
+        // if (priv == PRIV_S && pte[PTE_U] && is_exec)
+        //     ok = 1'b0;  // Disabled for ucore compatibility
         
         // Check read permission (Load)
         if (!is_wr && !is_exec && !pte[PTE_R])
@@ -239,10 +240,11 @@ module mmu (
                 tlb_perm_ok = 1'b0;
             
             // S-mode accessing U pages:
-            // For ucore compatibility, allow S-mode read/write to U pages without SUM check.
-            // Only prohibit S-mode execute from U pages (security feature per RISC-V spec).
-            if (priv_mode == PRIV_S && tlb_perm[3] && is_execute) // U bit is at index 3
-                tlb_perm_ok = 1'b0;
+            // For ucore compatibility, allow S-mode access to U pages without SUM check.
+            // This includes execute access since ucore kernel code may be in U-pages.
+            // NOTE: This differs from strict RISC-V spec.
+            // if (priv_mode == PRIV_S && tlb_perm[3] && is_execute) // U bit is at index 3
+            //     tlb_perm_ok = 1'b0;  // Disabled for ucore compatibility
             
             // Check Read
             if (!is_write && !is_execute && !tlb_perm[0]) // Read bit is at index 0

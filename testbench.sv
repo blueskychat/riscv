@@ -425,6 +425,96 @@ module testbench;
     // 波形输出
     
 
+    // ============================================================================
+    // Debug Monitoring: Trap Handler Entry and PC Loop Detection
+    // ============================================================================
+    // Monitor:
+    // 1. Every trap entry (trap_enter signal)
+    // 2. scause/trap_cause value
+    // 3. PC entering __alltraps (0x80401694)
+    // 4. Detect stuck loop between schedule (0x8040e074) and __alltraps
+    
+    // Access internal CPU signals via hierarchical path
+    // dut is the riscv_cpu_top instance
+    
+    // Counter for detecting stuck loops
+    integer trap_count = 0;
+    logic [31:0] last_trap_cause = 32'h0;
+    integer same_trap_count = 0;
+    
+    // Monitor trap_enter signal
+    always @(posedge clk_50M) begin
+        if (dut.trap_enter) begin
+            trap_count = trap_count + 1;
+            
+            // Only print non-ecall traps to reduce noise (ecalls are normal SBI output)
+            // cause 0x8 = ecall from U-mode, 0x9 = ecall from S-mode
+            if (dut.trap_cause != 32'h00000008 && dut.trap_cause != 32'h00000009) begin
+                $display("[%0t] TRAP ENTER #%0d: cause=0x%08h pc=0x%08h val=0x%08h priv=%0d to_s=%0d",
+                         $time, trap_count, 
+                         dut.trap_cause, 
+                         dut.trap_pc, 
+                         dut.trap_val,
+                         dut.priv_mode,
+                         dut.trap_to_s);
+            end
+            
+            // Track if same trap is repeating (indicates stuck loop)
+            // IGNORE ecalls (0x8, 0x9) since they are normal SBI console output
+            if (dut.trap_cause != 32'h00000008 && dut.trap_cause != 32'h00000009) begin
+                if (dut.trap_cause == last_trap_cause) begin
+                    same_trap_count = same_trap_count + 1;
+                    if (same_trap_count >= 5) begin
+                        $display("[%0t] WARNING: Same trap cause 0x%08h repeated %0d times!",
+                                 $time, dut.trap_cause, same_trap_count);
+                    end
+                    // Stop on repeated timer interrupts or other traps (not ecalls)
+                    if (same_trap_count >= 20) begin
+                        $display("[%0t] ERROR: Trap loop detected! Stopping simulation.", $time);
+                        $display("       Trap cause: 0x%08h", dut.trap_cause);
+                        $display("       Trap PC:    0x%08h", dut.trap_pc);
+                        $display("       Priv mode:  %0d", dut.priv_mode);
+                        $finish;
+                    end
+                end else begin
+                    same_trap_count = 0;
+                    last_trap_cause = dut.trap_cause;
+                end
+            end
+        end
+    end
+    
+    // Monitor PC entering __alltraps (0x80401694)
+    always @(posedge clk_50M) begin
+        if (dut.pc == 32'h80401694) begin
+            $display("[%0t] PC at __alltraps entry, scause pending...", $time);
+        end
+    end
+    
+    // Monitor timer interrupt signals
+    logic timer_int_last = 0;
+    always @(posedge clk_50M) begin
+        if (dut.timer_interrupt && !timer_int_last) begin
+            $display("[%0t] TIMER INTERRUPT asserted: mie_mtie=%0d mstatus_mie=%0d priv=%0d",
+                     $time, dut.mie_mtie, dut.mstatus_mie, dut.priv_mode);
+        end
+        timer_int_last <= dut.timer_interrupt;
+    end
+    
+    // Monitor mret/sret execution - only show non-SBI-handler returns
+    integer sret_count = 0;
+    always @(posedge clk_50M) begin
+        // MRET: only show if NOT returning to SBI ecall handler (0x804008b8)
+        if (dut.u_csr.mret_exec && dut.mepc_out != 32'h804008b8) begin
+            $display("[%0t] MRET executed: returning to PC=0x%08h, new_priv=%0d",
+                     $time, dut.mepc_out, dut.u_csr.mstatus[12:11]);
+        end
+        if (dut.u_csr.sret_exec) begin
+            sret_count = sret_count + 1;
+            $display("[%0t] SRET #%0d: returning to PC=0x%08h, new_priv=%0d (was S-mode)",
+                     $time, sret_count, dut.sepc_out, dut.u_csr.sstatus[8]);
+        end
+    end
     
     /*
     initial begin
