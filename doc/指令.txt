@@ -128,3 +128,84 @@ D:\sqw\code\verilogtest\riscv\riscv.srcs 这是一个五级流水线CPU项目。
 iverilog -g 2012 -D SIMU -o sim.vvp -s testbench *.sv *.v 
 运行仿真命令用:
 vvp -n sim.vvp
+
+D:\sqw\code\verilogtest\riscv\riscv.srcs\ucore 请分析该目录
+编译：
+rm -rf obj && make  
+riscv64-unknown-elf-objdump -S bin/kernel > bin/kernel.asm
+QEMU仿真：
+cd bin
+qemu-system-riscv32 -M virt -bios rbl.img -device loader,addr=0x80400000,file=ucore.img -nographic
+
+Welcome to Rust Boot Loader!
+Going to supervisor mode: entry=0x80400000, hartid=0, dtb=0x0
+(THU.CST) os is loading ...
+
+Special kernel symbols:
+  entry  0x8040000c (virtual)
+  etext  0x80413f3c (virtual)
+  edata  0x8049a04c (virtual)
+  end    0x8049d8bc (virtual)
+Kernel executable memory footprint: 631KB
+memory management: default_pmm_manager
+physcial memory map:
+  memory: 0x00400000, [0x80400000, 0x807fffff].
+check_alloc_page() succeeded!
+check_pgdir() succeeded!
+check_boot_pgdir() succeeded!
+-------------------- BEGIN --------------------
+PDE(002) 80400000-80c00000 00800000 ur-
+  |-- PTE(00800) 80400000-80c00000 00800000 -rw
+PDE(001) fac00000-fb000000 00400000 -r-
+  |-- PTE(00002) fae01000-fae03000 00002000 ur-
+  |-- PTE(00001) fafeb000-fafec000 00001000 -r-
+  |-- PTE(00001) fafec000-fafed000 00001000 -rw
+PDE(001) fb000000-fb400000 00400000 -rw
+--------------------- END ---------------------
+use SLOB allocator
+kmalloc_init() succeeded!
+Load page fault
+trapframe at 0x80419f00
+  zero     0x00000000
+  ra       0x804029c8
+  sp       0x80419f90
+  gp       0x00000000
+  tp       0x00000000
+  t0       0x80413620
+  t1       0x8040182c
+  t2       0x00000000
+  s0       0x00000000
+  s1       0x8049a040
+  a0       0x00000034
+  a1       0x00000000
+  a2       0x00000000
+  a3       0x8049a038
+  a4       0x00000000
+  a5       0x804b10b0
+  a6       0xfafed000
+  a7       0x00000001
+  s2       0x00000007
+  s3       0x0000003b
+  s4       0x00000000
+  s5       0x00000000
+  s6       0x00000000
+  s7       0x00000000
+  s8       0x00000000
+  s9       0x00000000
+  s10      0x00000000
+  s11      0x00000000
+  t3       0x0000002d
+  t4       0x00000000
+  t5       0x00000000
+  t6       0x00000000
+  status   0x00000100
+  epc      0x804027d0
+  badvaddr 0x00000000
+  cause    0x0000000d
+page falut at 0x00000000: K/R
+kernel panic at kern/trap/trap.c:142:
+    unhandled page fault.
+
+Welcome to the kernel debug monitor!!
+Type 'help' for a list of commands.
+K> 

@@ -30,11 +30,27 @@ module uart_controller #(
 
 `ifdef SIMU
   // ============================================================================
-  // Simulation Mode: Bypass real UART, use $write for instant output
+  // Simulation Mode: Fast TX output via $write, real RX for uart_model input
   // ============================================================================
   
-  // In simulation mode, TX is always ready (no baud rate delay)
-  wire [7:0] reg_status_simu = {2'b0, 1'b1, 4'b0, 1'b0};  // TX ready, RX empty
+  // uart receiver - keep real receiver for simulation input from uart_model
+  logic rxd_data_ready;
+  logic [7:0] rxd_data;
+  logic rxd_clear;
+
+  async_receiver #(
+      .ClkFrequency(CLK_FREQ),
+      .Baud        (BAUD)
+  ) u_async_receiver (
+      .clk           (clk_i),
+      .RxD           (uart_rxd_i),
+      .RxD_data_ready(rxd_data_ready),
+      .RxD_clear     (rxd_clear),
+      .RxD_data      (rxd_data)
+  );
+
+  // Status register: TX always ready, RX status from real receiver
+  wire [7:0] reg_status_simu = {2'b0, 1'b1, 4'b0, rxd_data_ready};
   
   // Wishbone ACK - immediate response
   always_ff @(posedge clk_i) begin
@@ -61,12 +77,18 @@ module uart_controller #(
     end
   end
   
-  // Read logic - always return TX ready status
+  // Read logic - return real RX data and status
   always_ff @(posedge clk_i) begin
-    if (!rst_i && wb_stb_i && !wb_we_i) begin
+    if (rst_i) begin
+      rxd_clear <= 1;  // clear rxd to initialize dataready
+    end else if (wb_stb_i && !wb_we_i) begin
       case (wb_adr_i[7:0])
         REG_DATA: begin
-          wb_dat_o <= 32'h0;  // No RX data in simulation
+          if (wb_sel_i[0]) wb_dat_o[7:0] <= rxd_data;
+          if (wb_sel_i[1]) wb_dat_o[15:8] <= rxd_data;
+          if (wb_sel_i[2]) wb_dat_o[23:16] <= rxd_data;
+          if (wb_sel_i[3]) wb_dat_o[31:24] <= rxd_data;
+          rxd_clear <= 1;  // Clear after read
         end
         REG_STATUS: begin
           if (wb_sel_i[0]) wb_dat_o[7:0] <= reg_status_simu;
@@ -76,10 +98,12 @@ module uart_controller #(
         end
         default: wb_dat_o <= 32'h0;
       endcase
+    end else begin
+      rxd_clear <= 0;
     end
   end
   
-  // Unused signals in simulation mode
+  // TX pin unused in simulation (using $write instead)
   assign uart_txd_o = 1'b1;  // Idle state
 
 `else

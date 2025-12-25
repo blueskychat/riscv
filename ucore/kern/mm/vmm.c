@@ -316,6 +316,7 @@ struct mm_struct *check_mm_struct;
 
 // check_pgfault - check correctness of pgfault handler
 static void check_pgfault(void) {
+    cprintf("[DEBUG] check_pgfault: starting...\n");
     size_t nr_free_pages_store = nr_free_pages();
 
     check_mm_struct = mm_create();
@@ -333,11 +334,24 @@ static void check_pgfault(void) {
     uintptr_t addr = 0x100;
     assert(find_vma(mm, addr) == vma);
 
+    cprintf("[DEBUG] check_pgfault: about to write to 0x%x\n", addr);
     int i, sum = 0;
     for (i = 0; i < 100; i++) {
         *(char *)(addr + i) = i;
         sum += i;
     }
+    cprintf("[DEBUG] check_pgfault: writes complete, sum after writes = %d\n", sum);
+    cprintf("[DEBUG] check_pgfault: first 10 bytes: ");
+    for (i = 0; i < 10; i++) {
+        cprintf("%d ", *(char *)(addr + i));
+    }
+    cprintf("\n");
+    int read_sum = 0;
+    for (i = 0; i < 100; i++) {
+        read_sum += *(char *)(addr + i);
+    }
+    cprintf("[DEBUG] check_pgfault: read_sum = %d, expected = %d, diff = %d\n", 
+            read_sum, sum, sum - read_sum);
     for (i = 0; i < 100; i++) {
         sum -= *(char *)(addr + i);
     }
@@ -473,6 +487,13 @@ int do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
         }
     }
     ret = 0;
+    cprintf("do_pgfault: addr=0x%x mapped successfully, ptep=0x%x, *ptep=0x%x\n", 
+            addr, (uintptr_t)ptep, *ptep);
+    // FPGA FIX: Ensure TLB is fully synchronized before returning
+    // This is needed because on real hardware, there may be timing issues
+    // where the TLB flush isn't fully complete before SRET returns
+    asm volatile("sfence.vma");
+    asm volatile("fence");
 failed:
     return ret;
 }

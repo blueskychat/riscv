@@ -320,7 +320,7 @@ print-%:
 .PHONY: clean dist-clean handin packall tags
 clean:
 	$(V)$(RM) $(GRADE_GDB_IN) $(GRADE_QEMU_OUT)  $(SFSBINS) cscope* tags
-	$(V)$(RM) -r $(OBJDIR) $(BINDIR) $(SFSROOT)
+	$(V)$(RM) -r $(OBJDIR) $(SFSROOT)
 
 dist-clean: clean
 	-$(RM) $(HANDIN)

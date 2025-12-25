@@ -188,7 +188,18 @@ static void slob_free(void *block, int size)
 
 void
 slob_init(void) {
+  // 修复：复位后 .data 段不会被重新加载，arena 保留上次运行的脏数据
+  // 必须显式重新初始化 SLOB 分配器的状态
+  arena.next = &arena;
+  arena.units = 1;
+  slobfree = &arena;
+  bigblocks = NULL;
+
   cprintf("use SLOB allocator\n");
+  cprintf("DEBUG: arena=%p, arena.next=%p, arena.units=%d\n", 
+          &arena, arena.next, arena.units);
+  cprintf("DEBUG: slobfree=%p, slobfree->next=%p\n", 
+          slobfree, slobfree ? slobfree->next : 0);
 }
 
 inline void 

@@ -126,9 +126,18 @@ print_pgfault(struct trapframe *tf) {
 
 static int
 pgfault_handler(struct trapframe *tf) {
+    static int pgfault_count = 0;
     extern struct mm_struct *check_mm_struct;
+    pgfault_count++;
     if(check_mm_struct !=NULL) { //used for test check_swap
+            cprintf("[pgfault #%d] ", pgfault_count);
             print_pgfault(tf);
+            cprintf("  epc=0x%08x, badvaddr=0x%08x\n", tf->epc, tf->badvaddr);
+            // DIAGNOSTIC: Print a5 (x15) value saved in trapframe
+            cprintf("  [DIAG] tf->gpr.a5 = 0x%08x (expected 0x100 on first fault)\n", tf->gpr.a5);
+            if (pgfault_count > 5) {
+                panic("Too many page faults, probable infinite loop!\n");
+            }
         }
     struct mm_struct *mm;
     if (check_mm_struct != NULL) {
@@ -143,7 +152,12 @@ pgfault_handler(struct trapframe *tf) {
         }
         mm = current->mm;
     }
-    return do_pgfault(mm, tf->cause, tf->badvaddr);
+    int ret = do_pgfault(mm, tf->cause, tf->badvaddr);
+    // DIAGNOSTIC: Print a5 again after handler to verify it wasn't modified
+    if(check_mm_struct != NULL) {
+        cprintf("  [DIAG] After do_pgfault: tf->gpr.a5 = 0x%08x\n", tf->gpr.a5);
+    }
+    return ret;
 }
 
 static volatile int in_swap_tick_event = 0;
@@ -309,6 +323,14 @@ static inline void trap_dispatch(struct trapframe* tf) {
  * */
 void
 trap(struct trapframe *tf) {
+    // 调试：打印当前 sscratch 值（在嵌套 trap 中应该为 0）
+    uintptr_t sscratch_val;
+    asm volatile("csrr %0, sscratch" : "=r"(sscratch_val));
+    if (sscratch_val != 0) {
+        cprintf("[TRAP DEBUG] sscratch=0x%08x (SHOULD BE 0!), sp=0x%08x\n", 
+                sscratch_val, tf->gpr.sp);
+    }
+    
     // dispatch based on what type of trap has occurred
     if (current == NULL) {
         trap_dispatch(tf);
