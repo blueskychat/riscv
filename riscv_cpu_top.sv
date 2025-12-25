@@ -1125,7 +1125,6 @@ module riscv_cpu_top (
         .id_ex_mem_read (id_ex_reg.mem_read),
         .id_ex_reg_write(id_ex_reg.reg_write),
         .id_ex_rd       (id_ex_reg.rd),
-        .id_ex_is_csr   (id_ex_reg.is_csr),      // CSR-Use Hazard detection
         .ex_is_branch   (id_ex_reg.is_branch),
         .ex_mem_mem_read(ex_mem_reg.mem_read), 
         .ex_mem_rd      (ex_mem_reg.rd),       
