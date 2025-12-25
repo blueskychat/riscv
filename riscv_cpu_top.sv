@@ -1202,6 +1202,9 @@ module riscv_cpu_top (
             if (mem_stall) begin
                 // Memory Stall: Freeze
                 ex_mem_reg <= ex_mem_reg;
+            end else if (exception_redirect) begin
+                // 异常/中断/xret 时刷新 EX/MEM，防止后续指令继续执行
+                ex_mem_reg <= '0;
             end else begin
                 // Normal or Flush
                 ex_mem_reg <= flush_mask[2] ? '0 : ex_mem_next;
@@ -1211,8 +1214,6 @@ module riscv_cpu_top (
             // CRITICAL: When MEM stage page fault occurs, we must NOT let the faulting
             // instruction write back to registers. Otherwise, a Load page fault would
             // corrupt the destination register with garbage data.
-            // NOTE: Only flush for MEM stage faults (mem_exception_trigger), NOT for all
-            // trap_enter - interrupts and EX stage exceptions should allow MEM/WB to complete.
             if (mem_stall) begin
                 // Memory Stall: Freeze
                 mem_wb_reg <= mem_wb_reg;

@@ -334,6 +334,10 @@ static void check_pgfault(void) {
     uintptr_t addr = 0x100;
     assert(find_vma(mm, addr) == vma);
 
+    // DEBUG: Print sp right before the store that will trigger page fault
+    uintptr_t sp_before;
+    asm volatile("mv %0, sp" : "=r"(sp_before));
+    cprintf("[DEBUG] check_pgfault: sp before write = 0x%08x\n", sp_before);
     cprintf("[DEBUG] check_pgfault: about to write to 0x%x\n", addr);
     int i, sum = 0;
     for (i = 0; i < 100; i++) {
@@ -487,13 +491,6 @@ int do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
         }
     }
     ret = 0;
-    cprintf("do_pgfault: addr=0x%x mapped successfully, ptep=0x%x, *ptep=0x%x\n", 
-            addr, (uintptr_t)ptep, *ptep);
-    // FPGA FIX: Ensure TLB is fully synchronized before returning
-    // This is needed because on real hardware, there may be timing issues
-    // where the TLB flush isn't fully complete before SRET returns
-    asm volatile("sfence.vma");
-    asm volatile("fence");
 failed:
     return ret;
 }

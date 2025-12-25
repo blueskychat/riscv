@@ -367,6 +367,10 @@ module testbench;
             $display("MEMORY TEST: FAILED (Expected 4, but Result = %d)", byte_data);
         end
         */
+        //word_addr = 32'h80300000>>2;
+        //read_sram_word(word_addr, word_data);
+        //$display("address 0x%08x  data 0x%08h", (word_addr << 2), word_data);
+
         #10000;
         /*
         byte_cnt=0;

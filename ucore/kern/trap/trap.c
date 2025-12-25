@@ -20,6 +20,7 @@
 
 #define TICK_NUM 100
 
+
 static void print_ticks() {
     cprintf("%d ticks\n",TICK_NUM);
 #ifdef DEBUG_GRADE
@@ -132,10 +133,7 @@ pgfault_handler(struct trapframe *tf) {
     if(check_mm_struct !=NULL) { //used for test check_swap
             cprintf("[pgfault #%d] ", pgfault_count);
             print_pgfault(tf);
-            cprintf("  epc=0x%08x, badvaddr=0x%08x\n", tf->epc, tf->badvaddr);
-            // DIAGNOSTIC: Print a5 (x15) value saved in trapframe
-            cprintf("  [DIAG] tf->gpr.a5 = 0x%08x (expected 0x100 on first fault)\n", tf->gpr.a5);
-            if (pgfault_count > 5) {
+            if (pgfault_count > 100) {
                 panic("Too many page faults, probable infinite loop!\n");
             }
         }
@@ -152,12 +150,7 @@ pgfault_handler(struct trapframe *tf) {
         }
         mm = current->mm;
     }
-    int ret = do_pgfault(mm, tf->cause, tf->badvaddr);
-    // DIAGNOSTIC: Print a5 again after handler to verify it wasn't modified
-    if(check_mm_struct != NULL) {
-        cprintf("  [DIAG] After do_pgfault: tf->gpr.a5 = 0x%08x\n", tf->gpr.a5);
-    }
-    return ret;
+    return do_pgfault(mm, tf->cause, tf->badvaddr);
 }
 
 static volatile int in_swap_tick_event = 0;

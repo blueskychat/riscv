@@ -155,14 +155,6 @@ __alltraps:
     .globl __trapret
 __trapret:
     RESTORE_ALL
-    # FPGA FIX: Ensure all register loads complete before SRET
-    # On real hardware, there may be a timing issue where SRET
-    # executes before the last register load finishes.
-    fence
-    nop
-    nop
-    nop
-    nop
     # return from supervisor call
     sret
  
