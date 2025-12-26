@@ -432,6 +432,7 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
 
             ret = page_insert(to, npage, start, perm);
             assert(ret == 0);
+            cprintf("[COPY] VA=0x%08x src_pa=0x%08x dst_pa=0x%08x\n", start, page2pa(page), page2pa(npage));
         }
         start += PGSIZE;
     } while (start != 0 && start < end);

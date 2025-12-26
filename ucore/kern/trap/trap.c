@@ -191,6 +191,15 @@ void exception_handler(struct trapframe *tf) {
         case CAUSE_MISALIGNED_FETCH:
         case CAUSE_FETCH_ACCESS:
         case CAUSE_ILLEGAL_INSTRUCTION:
+            // 捕获用户态异常
+            cprintf("[TRAP] pid=%d cause=%d epc=0x%08x badvaddr=0x%08x\n",
+                    current ? current->pid : -1, tf->cause, tf->epc, tf->badvaddr);
+            if (current && !trap_in_kernel(tf)) {
+                cprintf("[TRAP] Killing user process due to exception\n");
+                do_exit(-E_KILLED);
+            }
+            panic("Unhandled exception: cause=%d epc=0x%08x\n", tf->cause, tf->epc);
+            break;
         case CAUSE_BREAKPOINT:
         case CAUSE_MISALIGNED_LOAD:
         case CAUSE_LOAD_ACCESS:

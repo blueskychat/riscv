@@ -250,8 +250,21 @@ proc_run(struct proc_struct *proc) {
 static void
 forkret(void) {
     // 简化版 forkret：仅保留必要操作
-    // 刷新 ICache，确保用户代码指令是最新的
+    // 先刷新 DCache，确保 memcpy 的数据写回内存
+    asm volatile("fence rw, rw" ::: "memory");
+    // 再刷新 ICache，确保取到最新的指令
     asm volatile("fence.i" ::: "memory");
+    
+    cprintf("[FORK] pid=%d epc=0x%08x status=0x%08x a0=%d\n", 
+            current->pid, current->tf->epc, current->tf->status, current->tf->gpr.a0);
+    
+    // 检查子进程页表中代码页的 PTE
+    if (current->mm && current->mm->pgdir) {
+        pte_t *pte0 = get_pte(current->mm->pgdir, 0x00800000, 0);
+        pte_t *pte1 = get_pte(current->mm->pgdir, 0x00801000, 0);
+        cprintf("[FORK] PTE[0x800000]=%08x PTE[0x801000]=%08x\n",
+                pte0 ? *pte0 : 0, pte1 ? *pte1 : 0);
+    }
     
     forkrets(current->tf);
 }
@@ -367,6 +380,11 @@ copy_mm(uint32_t clone_flags, struct proc_struct *proc) {
     if (ret != 0) {
         goto bad_dup_cleanup_mmap;
     }
+    
+    // 关键修复：确保页表修改从 DCache 写回物理内存
+    // 否则 IMMU PTW 从物理内存读取时会得到旧值
+    asm volatile("fence rw, rw" ::: "memory");
+    asm volatile("sfence.vma" ::: "memory");
 
 good_mm:
     mm_count_inc(mm);
@@ -653,6 +671,7 @@ load_icode(int fd, int argc, char **kargv) {
         ret = -E_INVAL_ELF;
         goto bad_elf_cleanup_pgdir;
     }
+    cprintf("[LOAD] ELF entry=0x%08x phnum=%d\n", elf->e_entry, elf->e_phnum);
 
     struct proghdr __ph, *ph = &__ph;
     uint32_t vm_flags, perm, phnum;
@@ -664,6 +683,7 @@ load_icode(int fd, int argc, char **kargv) {
         if (ph->p_type != ELF_PT_LOAD) {
             continue ;
         }
+        cprintf("[LOAD] PT_LOAD: va=0x%08x filesz=0x%x memsz=0x%x\n", ph->p_va, ph->p_filesz, ph->p_memsz);
         if (ph->p_filesz > ph->p_memsz) {
             ret = -E_INVAL_ELF;
             goto bad_cleanup_mmap;
@@ -699,6 +719,7 @@ load_icode(int fd, int argc, char **kargv) {
             if (end < la) {
                 size -= la - end;
             }
+            cprintf("[LOAD] Page: la=0x%08x pa=0x%08x size=0x%x\n", la - PGSIZE, page2pa(page), size);
             if ((ret = load_icode_read(fd, page2kva(page) + off, size, offset)) != 0) {
                 goto bad_cleanup_mmap;
             }

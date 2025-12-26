@@ -90,7 +90,15 @@ module icache (
     logic [127:0]    refill_data;
     logic [31:0]     refill_addr;
     
-    assign refill_addr = {pc_i[31:4], 4'b0000};
+    // Latched address for refill - prevents issues when PC changes during refill
+    logic [INDEX_WIDTH-1:0]      latched_index;
+    logic [TAG_WIDTH-1:0]        latched_tag;
+    logic [L0_INDEX_WIDTH-1:0]   latched_l0_index;
+    logic [L0_TAG_WIDTH-1:0]     latched_l0_tag_req;
+    logic [31:0]                 latched_refill_addr;
+    
+    // Use latched address during REFILL, current address otherwise
+    assign refill_addr = (state == REFILL) ? latched_refill_addr : {pc_i[31:4], 4'b0000};
     
     // Read data from BRAMs (registered)
     logic [127:0] data_read [WAYS-1:0];
@@ -222,8 +230,21 @@ module icache (
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             state <= IDLE;
+            latched_index <= '0;
+            latched_tag <= '0;
+            latched_l0_index <= '0;
+            latched_l0_tag_req <= '0;
+            latched_refill_addr <= '0;
         end else begin
             state <= next_state;
+            // Latch address when entering REFILL state (from COMPARE miss)
+            if (state == COMPARE && !cache_hit) begin
+                latched_index <= index;
+                latched_tag <= tag;
+                latched_l0_index <= l0_index;
+                latched_l0_tag_req <= l0_tag_req;
+                latched_refill_addr <= {pc_i[31:4], 4'b0000};
+            end
         end
     end
     
@@ -284,26 +305,26 @@ module icache (
         end
     end
     
-    // BRAM write (cache refill)
+    // BRAM write (cache refill) - Use LATCHED index and tag!
     always_ff @(posedge clk) begin
         if (state == REFILL && wb_ack_i && refill_counter == 2'b11) begin
-            // Write complete cache line to victim way.
+            // Write complete cache line to victim way using LATCHED address
             case (victim_way)
                 2'b00: begin
-                    data_bram_way0[index] <= {wb_dat_i, refill_data[95:0]};
-                    tag_bram_way0[index] <= tag;
+                    data_bram_way0[latched_index] <= {wb_dat_i, refill_data[95:0]};
+                    tag_bram_way0[latched_index] <= latched_tag;
                 end
                 2'b01: begin
-                    data_bram_way1[index] <= {wb_dat_i, refill_data[95:0]};
-                    tag_bram_way1[index] <= tag;
+                    data_bram_way1[latched_index] <= {wb_dat_i, refill_data[95:0]};
+                    tag_bram_way1[latched_index] <= latched_tag;
                 end
                 2'b10: begin
-                    data_bram_way2[index] <= {wb_dat_i, refill_data[95:0]};
-                    tag_bram_way2[index] <= tag;
+                    data_bram_way2[latched_index] <= {wb_dat_i, refill_data[95:0]};
+                    tag_bram_way2[latched_index] <= latched_tag;
                 end
                 2'b11: begin
-                    data_bram_way3[index] <= {wb_dat_i, refill_data[95:0]};
-                    tag_bram_way3[index] <= tag;
+                    data_bram_way3[latched_index] <= {wb_dat_i, refill_data[95:0]};
+                    tag_bram_way3[latched_index] <= latched_tag;
                 end
             endcase
         end
@@ -359,18 +380,18 @@ module icache (
                 end
             end
         end else begin
-            // Refill Update
+            // Refill Update - Use LATCHED indices!
             if (state == REFILL && wb_ack_i && refill_counter == 2'b11) begin
                 for (w = 0; w < WAYS; w = w + 1) begin
                     if (victim_way == w[1:0]) begin
-                        valid_array[w][index] <= 1'b1;
-                        lru_array[w][index] <= 2'b11;
+                        valid_array[w][latched_index] <= 1'b1;
+                        lru_array[w][latched_index] <= 2'b11;
                     end
                 end
-                // Update L0 on Refill
-                l0_data[l0_index] <= {wb_dat_i, refill_data[95:0]};
-                l0_tag[l0_index] <= l0_tag_req;
-                l0_valid[l0_index] <= 1'b1;
+                // Update L0 on Refill - Use LATCHED l0_index!
+                l0_data[latched_l0_index] <= {wb_dat_i, refill_data[95:0]};
+                l0_tag[latched_l0_index] <= latched_l0_tag_req;
+                l0_valid[latched_l0_index] <= 1'b1;
             end 
             // LRU Update on Hit
             else if (state == COMPARE && cache_hit) begin
