@@ -226,6 +226,9 @@ void pmm_init(void) {
     // boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, 0, PTE_W);
     boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, PADDR(KERNBASE),
                      READ_WRITE_EXEC);
+                     
+    // Map UART0 for direct access (fix blocking SBI issue)
+    boot_map_segment(boot_pgdir, UART0_BASE, UART0_CTX_SIZE, UART0_BASE, READ_WRITE);
 
     enable_paging();
 

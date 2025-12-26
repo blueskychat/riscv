@@ -80,6 +80,7 @@ struct proc_struct *initproc = NULL;
 struct proc_struct *current = NULL;
 
 static int nr_process = 0;
+static int next_safe = MAX_PID, last_pid = MAX_PID;
 
 void kernel_thread_entry(void);
 void forkrets(struct trapframe *tf);
@@ -197,7 +198,6 @@ get_pid(void) {
     static_assert(MAX_PID > MAX_PROCESS);
     struct proc_struct *proc;
     list_entry_t *list = &proc_list, *le;
-    static int next_safe = MAX_PID, last_pid = MAX_PID;
     if (++ last_pid >= MAX_PID) {
         last_pid = 1;
         goto inside;
@@ -1027,7 +1027,8 @@ user_main(void *arg) {
 static int
 init_main(void *arg) {
     int ret;
-    if ((ret = vfs_set_bootfs("disk0:")) != 0) {
+    char bootfs[] = "disk0:";
+    if ((ret = vfs_set_bootfs(bootfs)) != 0) {
         panic("set boot fs failed: %e.\n", ret);
     }
     
@@ -1062,6 +1063,10 @@ init_main(void *arg) {
 void
 proc_init(void) {
     int i;
+
+    // fix warm boot issue
+    last_pid = MAX_PID;
+    next_safe = MAX_PID;
 
     list_init(&proc_list);
     for (i = 0; i < HASH_LIST_SIZE; i ++) {

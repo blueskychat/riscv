@@ -15,6 +15,10 @@ static struct {
  * cons_intr - called by device interrupt routines to feed input
  * characters into the circular console input buffer.
  * */
+/* *
+ * cons_intr - called by device interrupt routines to feed input
+ * characters into the circular console input buffer.
+ * */
 void cons_intr(int (*proc)(void)) {
     int c;
     while ((c = (*proc)()) != -1) {
@@ -32,8 +36,18 @@ void kbd_intr(void) {
     serial_intr();
 }
 
+#include <memlayout.h>
+
 /* serial_proc_data - get data from serial port */
 int serial_proc_data(void) {
+    // Check LSR (Line Status Register) at offset 5
+    // Bit 0 = Data Ready (DR)
+    volatile uint8_t *uart_lsr = (uint8_t *)(UART0_BASE + 5);
+    
+    if ((*uart_lsr & 1) == 0) {
+        return -1;
+    }
+
     int c = sbi_console_getchar();
     if (c < 0) {
         return -1;

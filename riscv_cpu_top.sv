@@ -935,7 +935,7 @@ module riscv_cpu_top (
         .rst            (sys_rst),
         // CSR 读写接口
         .csr_addr       (csr_addr),
-        .csr_op         (csr_op),
+        .csr_op         (mem_stall ? CSR_OP_NONE : csr_op),
         .csr_wdata      (csr_wdata),
         .csr_rdata      (csr_rdata),
         // 异常/中断接口
