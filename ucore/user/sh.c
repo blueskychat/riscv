@@ -196,7 +196,7 @@ runit:
     if (argc == 0) {
         return 0;
     }
-    else if (strcmp(argv[0], "cd") == 0) {
+    if (strcmp(argv[0], "cd") == 0) {
         if (argc != 2) {
             return -1;
         }

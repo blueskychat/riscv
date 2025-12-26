@@ -104,6 +104,13 @@ _to_user:
     # Returning to user mode: save kernel sp in sscratch for next trap
     addi s0, sp, 36 * REGBYTES
     csrw sscratch, s0
+    # ===== 强制刷新 ICache 和 TLB 确保一致性 =====
+    # fence.i: 刷新 ICache，确保之后取到的指令是最新的
+    fence.i
+    # sfence.vma: 刷新 TLB，确保地址翻译正确
+    sfence.vma zero, zero
+    # 再次 fence.i 以确保完全同步
+    fence.i
 
 _restore_context:
     csrw sstatus, s1
@@ -163,3 +170,29 @@ forkrets:
     # set stack to this new process's trapframe
     move sp, a0
     j __trapret
+
+    # Test function: if sret to S-mode succeeds, this will execute
+    .globl sret_test_ok
+sret_test_ok:
+    # 直接写 UART 输出 "SRET_OK" 来确认 sret 成功
+    # UART 地址 0x10000000 (通过 SBI 调用更安全)
+    # 使用 SBI ecall 输出字符
+    li a7, 1         # SBI_CONSOLE_PUTCHAR
+    li a0, 'S'
+    ecall
+    li a0, 'R'
+    ecall
+    li a0, 'E'
+    ecall
+    li a0, 'T'
+    ecall
+    li a0, '_'
+    ecall
+    li a0, 'O'
+    ecall
+    li a0, 'K'
+    ecall
+    li a0, '\n'
+    ecall
+    # 无限循环
+1:  j 1b

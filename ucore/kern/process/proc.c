@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sync.h>
 #include <pmm.h>
+#include <mmu.h>
 #include <error.h>
 #include <sched.h>
 #include <elf.h>
@@ -248,6 +249,10 @@ proc_run(struct proc_struct *proc) {
 //       after switch_to, the current proc will execute here.
 static void
 forkret(void) {
+    // 简化版 forkret：仅保留必要操作
+    // 刷新 ICache，确保用户代码指令是最新的
+    asm volatile("fence.i" ::: "memory");
+    
     forkrets(current->tf);
 }
 
@@ -767,7 +772,7 @@ load_icode(int fd, int argc, char **kargv) {
     memset(tf, 0, sizeof(struct trapframe));
     tf->gpr.sp = stacktop;
     tf->epc = elf->e_entry;
-    tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE);
+    tf->status = (sstatus | SSTATUS_SPIE) & ~SSTATUS_SPP;
     ret = 0;
 out:
     return ret;

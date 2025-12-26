@@ -316,7 +316,6 @@ struct mm_struct *check_mm_struct;
 
 // check_pgfault - check correctness of pgfault handler
 static void check_pgfault(void) {
-    cprintf("[DEBUG] check_pgfault: starting...\n");
     size_t nr_free_pages_store = nr_free_pages();
 
     check_mm_struct = mm_create();
@@ -334,28 +333,11 @@ static void check_pgfault(void) {
     uintptr_t addr = 0x100;
     assert(find_vma(mm, addr) == vma);
 
-    // DEBUG: Print sp right before the store that will trigger page fault
-    uintptr_t sp_before;
-    asm volatile("mv %0, sp" : "=r"(sp_before));
-    cprintf("[DEBUG] check_pgfault: sp before write = 0x%08x\n", sp_before);
-    cprintf("[DEBUG] check_pgfault: about to write to 0x%x\n", addr);
     int i, sum = 0;
     for (i = 0; i < 100; i++) {
         *(char *)(addr + i) = i;
         sum += i;
     }
-    cprintf("[DEBUG] check_pgfault: writes complete, sum after writes = %d\n", sum);
-    cprintf("[DEBUG] check_pgfault: first 10 bytes: ");
-    for (i = 0; i < 10; i++) {
-        cprintf("%d ", *(char *)(addr + i));
-    }
-    cprintf("\n");
-    int read_sum = 0;
-    for (i = 0; i < 100; i++) {
-        read_sum += *(char *)(addr + i);
-    }
-    cprintf("[DEBUG] check_pgfault: read_sum = %d, expected = %d, diff = %d\n", 
-            read_sum, sum, sum - read_sum);
     for (i = 0; i < 100; i++) {
         sum -= *(char *)(addr + i);
     }
