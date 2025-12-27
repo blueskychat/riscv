@@ -204,14 +204,14 @@ void pmm_init(void) {
 
     // use pmm->check to verify the correctness of the alloc/free function in a
     // pmm
-    //check_alloc_page();
+    check_alloc_page();
 
     // create boot_pgdir, an initial page directory(Page Directory Table, PDT)
     boot_pgdir = boot_alloc_page();
     memset(boot_pgdir, 0, PGSIZE);
     boot_cr3 = PADDR(boot_pgdir);
 
-    //check_pgdir();
+    check_pgdir();
 
     static_assert(KERNBASE % PTSIZE == 0 && KERNTOP % PTSIZE == 0);
 
@@ -226,15 +226,16 @@ void pmm_init(void) {
     // boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, 0, PTE_W);
     boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, PADDR(KERNBASE),
                      READ_WRITE_EXEC);
-                     
+    /*                 
     // Map UART0 for direct access (fix blocking SBI issue)
     boot_map_segment(boot_pgdir, UART0_BASE, UART0_CTX_SIZE, UART0_BASE, READ_WRITE);
-
+    */
+    
     enable_paging();
 
     // now the basic virtual memory map(see memalyout.h) is established.
     // check the correctness of the basic virtual memory map.
-    //check_boot_pgdir();
+    check_boot_pgdir();
 
     print_pgdir();
 
@@ -432,7 +433,6 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
 
             ret = page_insert(to, npage, start, perm);
             assert(ret == 0);
-            cprintf("[COPY] VA=0x%08x src_pa=0x%08x dst_pa=0x%08x\n", start, page2pa(page), page2pa(npage));
         }
         start += PGSIZE;
     } while (start != 0 && start < end);

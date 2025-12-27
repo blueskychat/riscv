@@ -139,11 +139,8 @@ static inline int page_ref_dec(struct Page *page) {
 static inline void flush_tlb() { asm volatile("sfence.vma"); }
 
 // construct PTE from a page and permission bits
-// Note: We set A (Accessed) and D (Dirty) bits because the custom RISC-V CPU
-// doesn't implement hardware-managed A/D bits. Without these, page faults
-// will occur repeatedly.
 static inline pte_t pte_create(uintptr_t ppn, int type) {
-    return (ppn << PTE_PPN_SHIFT) | PTE_V | PTE_A | PTE_D | type;
+    return (ppn << PTE_PPN_SHIFT) | PTE_V | type;
 }
 
 static inline pte_t ptd_create(uintptr_t ppn) { return pte_create(ppn, PTE_V); }

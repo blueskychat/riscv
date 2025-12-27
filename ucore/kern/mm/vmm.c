@@ -240,9 +240,7 @@ bool copy_to_user(struct mm_struct *mm, void *dst, const void *src,
 
 // vmm_init - initialize virtual memory management
 //          - now just call check_vmm to check correctness of vmm
-void vmm_init(void) { 
-    //check_vmm(); 
-}
+void vmm_init(void) { check_vmm(); }
 
 // check_vmm - check correctness of vmm
 static void check_vmm(void) {

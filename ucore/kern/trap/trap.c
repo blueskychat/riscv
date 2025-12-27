@@ -20,7 +20,6 @@
 
 #define TICK_NUM 100
 
-
 static void print_ticks() {
     cprintf("%d ticks\n",TICK_NUM);
 #ifdef DEBUG_GRADE
@@ -127,13 +126,9 @@ print_pgfault(struct trapframe *tf) {
 
 static int
 pgfault_handler(struct trapframe *tf) {
-    static int pgfault_count = 0;
     extern struct mm_struct *check_mm_struct;
-    pgfault_count++;
-    if(check_mm_struct !=NULL) {
-            if (pgfault_count > 100) {
-                panic("Too many page faults, probable infinite loop!\n");
-            }
+    if(check_mm_struct !=NULL) { //used for test check_swap
+            print_pgfault(tf);
         }
     struct mm_struct *mm;
     if (check_mm_struct != NULL) {
@@ -158,29 +153,55 @@ void interrupt_handler(struct trapframe *tf) {
     intptr_t cause = (tf->cause << 1) >> 1;
     switch (cause) {
         case IRQ_U_SOFT:
+            cprintf("User software interrupt\n");
             break;
         case IRQ_S_SOFT:
+            cprintf("Supervisor software interrupt\n");
             serial_intr();
             dev_stdin_write(cons_getc());
             break;
         case IRQ_H_SOFT:
+            cprintf("Hypervisor software interrupt\n");
+            break;
         case IRQ_M_SOFT:
+            cprintf("Machine software interrupt\n");
+            break;
         case IRQ_U_TIMER:
+            cprintf("User timer interrupt\n");
             break;
         case IRQ_S_TIMER:
+            // "All bits besides SSIP and USIP in the sip register are
+            // read-only." -- privileged spec1.9.1, 4.1.4, p59
+            // In fact, Call sbi_set_timer will clear STIP, or you can clear it
+            // directly.
+            // clear_csr(sip, SIP_STIP);
             clock_set_next_event();
             ++ticks;
             run_timer_list();
+
             serial_intr();
             dev_stdin_write(cons_getc());
             break;
         case IRQ_H_TIMER:
+            cprintf("Hypervisor software interrupt\n");
+            break;
         case IRQ_M_TIMER:
+            cprintf("Machine software interrupt\n");
+            break;
         case IRQ_U_EXT:
+            cprintf("User external interrupt\n");
+            break;
         case IRQ_S_EXT:
+            cprintf("Supervisor external interrupt\n");
+            break;
         case IRQ_H_EXT:
+            cprintf("Hypervisor external interrupt\n");
+            break;
         case IRQ_M_EXT:
+            cprintf("Machine external interrupt\n");
+            break;
         default:
+            print_trapframe(tf);
             break;
     }
 }
@@ -189,62 +210,84 @@ void exception_handler(struct trapframe *tf) {
     int ret;
     switch (tf->cause) {
         case CAUSE_MISALIGNED_FETCH:
+            cprintf("Instruction address misaligned\n");
+            break;
         case CAUSE_FETCH_ACCESS:
+            cprintf("Instruction access fault\n");
+            break;
         case CAUSE_ILLEGAL_INSTRUCTION:
-            // 捕获用户态异常
-            cprintf("[TRAP] pid=%d cause=%d epc=0x%08x badvaddr=0x%08x\n",
-                    current ? current->pid : -1, tf->cause, tf->epc, tf->badvaddr);
-            if (current && !trap_in_kernel(tf)) {
-                cprintf("[TRAP] Killing user process due to exception\n");
-                do_exit(-E_KILLED);
-            }
-            panic("Unhandled exception: cause=%d epc=0x%08x\n", tf->cause, tf->epc);
+            cprintf("Illegal instruction\n");
             break;
         case CAUSE_BREAKPOINT:
+            cprintf("Breakpoint\n");
+            break;
         case CAUSE_MISALIGNED_LOAD:
+            cprintf("Load address misaligned\n");
+            break;
         case CAUSE_LOAD_ACCESS:
+            cprintf("Load access fault\n");
+            break;
         case CAUSE_MISALIGNED_STORE:
+            cprintf("AMO address misaligned\n");
+            break;
         case CAUSE_STORE_ACCESS:
+            cprintf("Store/AMO access fault\n");
             break;
         case CAUSE_USER_ECALL:
+            // cprintf("Environment call from U-mode\n");
             tf->epc += 4;
             syscall();
             break;
         case CAUSE_SUPERVISOR_ECALL:
+            cprintf("Environment call from S-mode\n");
             tf->epc += 4;
             syscall();
             break;
         case CAUSE_HYPERVISOR_ECALL:
+            cprintf("Environment call from H-mode\n");
+            break;
         case CAUSE_MACHINE_ECALL:
+            cprintf("Environment call from M-mode\n");
+            break;
         case CAUSE_FETCH_PAGE_FAULT:
+            cprintf("Instruction page fault\n");
             break;
         case CAUSE_LOAD_PAGE_FAULT:
+            cprintf("Load page fault\n");
             if ((ret = pgfault_handler(tf)) != 0) {
+                print_trapframe(tf);
                 if (current == NULL) {
                     panic("handle pgfault failed. ret=%d\n", ret);
                 } else {
                     if (trap_in_kernel(tf)) {
-                        panic("handle pgfault failed in kernel mode. ret=%d\n", ret);
+                        panic("handle pgfault failed in kernel mode. ret=%d\n",
+                              ret);
                     }
+                    cprintf("killed by kernel.\n");
                     panic("handle user mode pgfault failed. ret=%d\n", ret);
                     do_exit(-E_KILLED);
                 }
             }
             break;
         case CAUSE_STORE_PAGE_FAULT:
+            cprintf("Store/AMO page fault\n");
             if ((ret = pgfault_handler(tf)) != 0) {
+                print_trapframe(tf);
                 if (current == NULL) {
                     panic("handle pgfault failed. ret=%d\n", ret);
                 } else {
                     if (trap_in_kernel(tf)) {
-                        panic("handle pgfault failed in kernel mode. ret=%d\n", ret);
+                        panic("handle pgfault failed in kernel mode. ret=%d\n",
+                              ret);
                     }
+                    cprintf("killed by kernel.\n");
                     panic("handle user mode pgfault failed. ret=%d\n", ret);
                     do_exit(-E_KILLED);
                 }
             }
             break;
         default:
+            print_trapframe(tf);
             break;
     }
 }
@@ -266,7 +309,6 @@ static inline void trap_dispatch(struct trapframe* tf) {
  * */
 void
 trap(struct trapframe *tf) {
-    
     // dispatch based on what type of trap has occurred
     if (current == NULL) {
         trap_dispatch(tf);

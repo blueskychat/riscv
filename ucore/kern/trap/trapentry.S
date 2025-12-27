@@ -2,7 +2,7 @@
 
     .altmacro
     .macro SAVE_ALL
-    LOCAL _from_kernel
+    LOCAL _restore_kernel_sp
     LOCAL _save_context
 
     # If coming from userspace, preserve the user stack pointer and load
@@ -11,22 +11,13 @@
     csrrw sp, sscratch, sp
     bnez sp, _save_context
 
-_from_kernel:
-    # Coming from kernel mode: sscratch was 0, now sscratch has our kernel sp
-    # Swap back to get kernel sp in sp, and 0 back in sscratch
-    csrrw sp, sscratch, sp
-
+_restore_kernel_sp:
+    csrr sp, sscratch
 _save_context:
-    # At this point:
-    # - If from user: sp = kernel sp, sscratch = user sp
-    # - If from kernel: sp = kernel sp, sscratch = 0
-    
     addi sp, sp, -36 * REGBYTES
-    
-    # save x registers (except sp which we handle specially)
+    # save x registers
     STORE x0, 0*REGBYTES(sp)
     STORE x1, 1*REGBYTES(sp)
-    # x2 (sp) saved below after getting correct value
     STORE x3, 3*REGBYTES(sp)
     STORE x4, 4*REGBYTES(sp)
     STORE x5, 5*REGBYTES(sp)
@@ -57,27 +48,16 @@ _save_context:
     STORE x30, 30*REGBYTES(sp)
     STORE x31, 31*REGBYTES(sp)
 
-    # Read sscratch: for user trap this is user sp, for kernel trap this is 0
-    csrr s0, sscratch
+    # get sr, epc, badvaddr, cause
+    # Set sscratch register to 0, so that if a recursive exception
+    # occurs, the exception vector knows it came from the kernel
+    csrrw s0, sscratch, x0
     csrr s1, sstatus
     csrr s2, sepc
     csrr s3, sbadaddr
     csrr s4, scause
 
-    # Check if we came from kernel (SPP bit set means from S-mode)
-    andi s5, s1, SSTATUS_SPP
-    bnez s5, 1f
-    # From user mode: save user sp (in s0)
     STORE s0, 2*REGBYTES(sp)
-    j 2f
-1:
-    # From kernel mode: save original kernel sp (current sp + frame size)
-    addi s5, sp, 36 * REGBYTES
-    STORE s5, 2*REGBYTES(sp)
-2:
-    # Now set sscratch to 0 to mark we're in kernel mode
-    csrw sscratch, x0
-    
     STORE s1, 32*REGBYTES(sp)
     STORE s2, 33*REGBYTES(sp)
     STORE s3, 34*REGBYTES(sp)
@@ -85,33 +65,19 @@ _save_context:
     .endm
 
     .macro RESTORE_ALL
-    LOCAL _to_user
-    LOCAL _to_kernel
+    LOCAL _save_kernel_sp
     LOCAL _restore_context
 
     LOAD s1, 32*REGBYTES(sp)
     LOAD s2, 33*REGBYTES(sp)
 
     andi s0, s1, SSTATUS_SPP
-    beqz s0, _to_user
+    bnez s0, _restore_context
 
-_to_kernel:
-    # Returning to kernel mode: sscratch should remain 0
-    # (it's already 0 because we set it in SAVE_ALL)
-    j _restore_context
-
-_to_user:
-    # Returning to user mode: save kernel sp in sscratch for next trap
+_save_kernel_sp:
+    # Save unwound kernel stack pointer in sscratch
     addi s0, sp, 36 * REGBYTES
     csrw sscratch, s0
-    # ===== 强制刷新 ICache 和 TLB 确保一致性 =====
-    # fence.i: 刷新 ICache，确保之后取到的指令是最新的
-    fence.i
-    # sfence.vma: 刷新 TLB，确保地址翻译正确
-    sfence.vma zero, zero
-    # 再次 fence.i 以确保完全同步
-    fence.i
-
 _restore_context:
     csrw sstatus, s1
     csrw sepc, s2
@@ -147,7 +113,7 @@ _restore_context:
     LOAD x29, 29*REGBYTES(sp)
     LOAD x30, 30*REGBYTES(sp)
     LOAD x31, 31*REGBYTES(sp)
-    # restore sp last - this contains the correct original sp for both cases
+    # restore sp last
     LOAD x2, 2*REGBYTES(sp)
     .endm
 
@@ -170,29 +136,3 @@ forkrets:
     # set stack to this new process's trapframe
     move sp, a0
     j __trapret
-
-    # Test function: if sret to S-mode succeeds, this will execute
-    .globl sret_test_ok
-sret_test_ok:
-    # 直接写 UART 输出 "SRET_OK" 来确认 sret 成功
-    # UART 地址 0x10000000 (通过 SBI 调用更安全)
-    # 使用 SBI ecall 输出字符
-    li a7, 1         # SBI_CONSOLE_PUTCHAR
-    li a0, 'S'
-    ecall
-    li a0, 'R'
-    ecall
-    li a0, 'E'
-    ecall
-    li a0, 'T'
-    ecall
-    li a0, '_'
-    ecall
-    li a0, 'O'
-    ecall
-    li a0, 'K'
-    ecall
-    li a0, '\n'
-    ecall
-    # 无限循环
-1:  j 1b
