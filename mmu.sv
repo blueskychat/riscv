@@ -96,6 +96,16 @@ module mmu (
     // satp.PPN (页表根目录物理页号)
     wire [21:0] satp_ppn = satp[21:0];
     
+    // ==================== 地址范围判断 ====================
+    // 已知外设地址范围 (直接 bypass，不经过页表翻译)
+    // CLINT: 0x02000000 ~ 0x020FFFFF
+    // UART:  0x10000000 ~ 0x1000FFFF
+    wire is_clint = (vaddr[31:20] == 12'h020);
+    wire is_uart  = (vaddr[31:16] == 16'h1000);
+    
+    // SRAM 地址需要翻译，外设地址直接 bypass
+    wire is_sram_addr = !(is_clint || is_uart);
+    
     // ==================== 状态机时序逻辑 ====================
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
@@ -281,8 +291,8 @@ module mmu (
         case (state)
             IDLE: begin
                 if (translate_req) begin
-                    if (!paging_enabled) begin
-                        // 分页未启用: 直接使用物理地址
+                    if (!paging_enabled || !is_sram_addr) begin
+                        // 分页未启用 或 非 SRAM 地址: 直接使用物理地址 (bypass)
                         paddr = vaddr;
                         translate_done = 1'b1;
                     end else begin

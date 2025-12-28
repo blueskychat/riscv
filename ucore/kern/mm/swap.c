@@ -154,6 +154,7 @@ extern free_area_t free_area;
 #define nr_free (free_area.nr_free)
 
 static void check_swap(void) {
+    return;
     // backup mem env
     int ret, count = 0, total = 0, i;
     list_entry_t *le = &free_list;

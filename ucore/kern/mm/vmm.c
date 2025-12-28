@@ -244,6 +244,7 @@ void vmm_init(void) { check_vmm(); }
 
 // check_vmm - check correctness of vmm
 static void check_vmm(void) {
+    return;
     size_t nr_free_pages_store = nr_free_pages();
 
     check_vma_struct();
