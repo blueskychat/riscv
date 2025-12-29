@@ -128,6 +128,9 @@ __alltraps:
     .globl __trapret
 __trapret:
     RESTORE_ALL
+    # Ensure memory operations complete and TLB is consistent before user mode
+    fence
+    sfence.vma zero, zero
     # return from supervisor call
     sret
  
@@ -135,4 +138,20 @@ __trapret:
 forkrets:
     # set stack to this new process's trapframe
     move sp, a0
+    # DEBUG: Disable S-mode interrupts to test interrupt interference
+    csrci sstatus, 2    # Clear SIE bit
+    # Ensure instruction cache coherency for forked process
+    fence.i             # First fence.i - flush DCache, invalidate ICache
+    # Add delay NOPs to ensure memory operations complete
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    fence               # Memory barrier
+    fence.i             # Second fence.i just to be safe
+    sfence.vma zero, zero
     j __trapret

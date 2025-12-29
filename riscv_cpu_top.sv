@@ -1227,4 +1227,52 @@ module riscv_cpu_top (
         end
     end
 
+    // ==================== Simulation Debug Monitor ====================
+    // This block is for simulation debugging only and will be ignored during synthesis
+    // if synthesis tools support "translate_off" or similar pragmas.
+    // Since we are targeting simulation, we use $display directly.
+    
+`ifdef SIMU
+    always_ff @(posedge sys_clk) begin
+        // Monitor PC fetching user address (CRITICAL: this is what we need to see)
+        if (pc == 32'h0080_0000 || pc == 32'h0080_0034 || pc == 32'h0080_02d0) begin
+            $display("[HW-MON] Time=%0t Fetching User PC=0x%08x Priv=%b if_stall=%0d", $time, pc, priv_mode, if_stall_req);
+        end
+
+        // Monitor DMMU PTW and mem_stall during user mode
+        if (priv_mode == 2'b00 && pc[31:20] == 12'h008) begin
+            if (dmmu_ptw_req && !dmmu_ptw_ack) begin
+                $display("[HW-MON] Time=%0t DMMU-PTW waiting: vaddr=0x%08h ptw_addr=0x%08h arb_state=%0d",
+                         $time, mem_vaddr, dmmu_ptw_addr, u_ptw_arbiter.state);
+            end
+            if (immu_ptw_req && !immu_ptw_ack) begin
+                $display("[HW-MON] Time=%0t IMMU-PTW waiting: PC=0x%08h arb_state=%0d",
+                         $time, pc, u_ptw_arbiter.state);
+            end
+        end
+        /*
+        // Monitor SRET execution
+        if (ex_sret && !mem_stall) begin
+            $display("[HW-MON] Time=%0t SRET executed at PC=0x%08x Target=0x%08x", $time, id_ex_reg.pc, sepc_out);
+        end
+
+        // Monitor Trap Entry
+        if (trap_enter) begin
+            $display("[HW-MON] Time=%0t TRAP ENTER! Cause=0x%08x PC=0x%08x Val=0x%08x Priv=%b", 
+                     $time, trap_cause, trap_pc, trap_val, priv_mode);
+        end
+
+        // Monitor FENCE.I State Transitions
+        if (fence_i_state != fence_i_next_state) begin
+            $display("[HW-MON] Time=%0t FENCE.I State Change: %d -> %d", $time, fence_i_state, fence_i_next_state);
+        end
+        
+        // Monitor Page Faults specifically
+        if (dmmu_page_fault || dmmu_page_fault_latched) begin
+             $display("[HW-MON] Time=%0t DMMU Page Fault! VAddr=0x%08x PC=0x%08x", $time, mem_vaddr, ex_mem_reg.pc);
+        end
+        */
+    end
+`endif
+
 endmodule

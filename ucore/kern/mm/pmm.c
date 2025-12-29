@@ -226,10 +226,8 @@ void pmm_init(void) {
     // boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, 0, PTE_W);
     boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, PADDR(KERNBASE),
                      READ_WRITE_EXEC);
-    /*                 
     // Map UART0 for direct access (fix blocking SBI issue)
-    boot_map_segment(boot_pgdir, UART0_BASE, UART0_CTX_SIZE, UART0_BASE, READ_WRITE);
-    */
+    //boot_map_segment(boot_pgdir, UART0_BASE, UART0_CTX_SIZE, UART0_BASE, READ_WRITE);
     
     enable_paging();
 
@@ -430,6 +428,27 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
             void *kva_dst = page2kva(npage);
 
             memcpy(kva_dst, kva_src, PGSIZE);
+
+            // DEBUG: Verify memcpy for ALL user text pages (0x00800000 - 0x0080FFFF)
+            // This helps debug fork child second page issue
+            if (start >= UTEXT && start < UTEXT + 0x10000) {
+                uint32_t src_instr = *(uint32_t *)kva_src;
+                uint32_t dst_instr = *(uint32_t *)kva_dst;
+                cprintf("[COPY] VA=0x%08x src_pa=0x%08x dst_pa=0x%08x\n",
+                        start, page2pa(page), page2pa(npage));
+                cprintf("[COPY]   src[0]=0x%08x dst[0]=0x%08x %s\n",
+                        src_instr, dst_instr,
+                        (src_instr == dst_instr) ? "OK" : "MISMATCH!");
+                
+                // For first page (0x00800000), also check offset 0x2d0
+                if (start == UTEXT) {
+                    uint32_t *src_2d0 = (uint32_t *)((char *)kva_src + 0x2d0);
+                    uint32_t *dst_2d0 = (uint32_t *)((char *)kva_dst + 0x2d0);
+                    cprintf("[COPY]   src[0x2d0]=0x%08x dst[0x2d0]=0x%08x %s\n",
+                            *src_2d0, *dst_2d0,
+                            (*src_2d0 == *dst_2d0) ? "OK" : "MISMATCH!");
+                }
+            }
 
             ret = page_insert(to, npage, start, perm);
             assert(ret == 0);

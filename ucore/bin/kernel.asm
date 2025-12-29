@@ -3198,14 +3198,14 @@ Disassembly of section .text:
 80402fc8:	fd9ff06f          	j	80402fa0 <get_pte+0x108>
 80402fcc:	00010617          	auipc	a2,0x10
 80402fd0:	6d460613          	addi	a2,a2,1748 # 804136a0 <default_pmm_manager+0x30>
-80402fd4:	12300593          	li	a1,291
+80402fd4:	12100593          	li	a1,289
 80402fd8:	00011517          	auipc	a0,0x11
 80402fdc:	84c50513          	addi	a0,a0,-1972 # 80413824 <default_pmm_manager+0x1b4>
 80402fe0:	e44fd0ef          	jal	ra,80400624 <__panic>
 80402fe4:	00050693          	mv	a3,a0
 80402fe8:	00010617          	auipc	a2,0x10
 80402fec:	6b860613          	addi	a2,a2,1720 # 804136a0 <default_pmm_manager+0x30>
-80402ff0:	12000593          	li	a1,288
+80402ff0:	11e00593          	li	a1,286
 80402ff4:	00011517          	auipc	a0,0x11
 80402ff8:	83050513          	addi	a0,a0,-2000 # 80413824 <default_pmm_manager+0x1b4>
 80402ffc:	e28fd0ef          	jal	ra,80400624 <__panic>
@@ -3295,7 +3295,7 @@ Disassembly of section .text:
 80403144:	87c68693          	addi	a3,a3,-1924 # 804139bc <default_pmm_manager+0x34c>
 80403148:	00010617          	auipc	a2,0x10
 8040314c:	9ec60613          	addi	a2,a2,-1556 # 80412b34 <commands+0x1bc>
-80403150:	15b00593          	li	a1,347
+80403150:	15900593          	li	a1,345
 80403154:	00010517          	auipc	a0,0x10
 80403158:	6d050513          	addi	a0,a0,1744 # 80413824 <default_pmm_manager+0x1b4>
 8040315c:	cc8fd0ef          	jal	ra,80400624 <__panic>
@@ -3303,7 +3303,7 @@ Disassembly of section .text:
 80403164:	83068693          	addi	a3,a3,-2000 # 80413990 <default_pmm_manager+0x320>
 80403168:	00010617          	auipc	a2,0x10
 8040316c:	9cc60613          	addi	a2,a2,-1588 # 80412b34 <commands+0x1bc>
-80403170:	15a00593          	li	a1,346
+80403170:	15800593          	li	a1,344
 80403174:	00010517          	auipc	a0,0x10
 80403178:	6b050513          	addi	a0,a0,1712 # 80413824 <default_pmm_manager+0x1b4>
 8040317c:	ca8fd0ef          	jal	ra,80400624 <__panic>
@@ -3380,7 +3380,7 @@ Disassembly of section .text:
 80403290:	73068693          	addi	a3,a3,1840 # 804139bc <default_pmm_manager+0x34c>
 80403294:	00010617          	auipc	a2,0x10
 80403298:	8a060613          	addi	a2,a2,-1888 # 80412b34 <commands+0x1bc>
-8040329c:	16c00593          	li	a1,364
+8040329c:	16a00593          	li	a1,362
 804032a0:	00010517          	auipc	a0,0x10
 804032a4:	58450513          	addi	a0,a0,1412 # 80413824 <default_pmm_manager+0x1b4>
 804032a8:	b7cfd0ef          	jal	ra,80400624 <__panic>
@@ -3388,7 +3388,7 @@ Disassembly of section .text:
 804032b0:	6e468693          	addi	a3,a3,1764 # 80413990 <default_pmm_manager+0x320>
 804032b4:	00010617          	auipc	a2,0x10
 804032b8:	88060613          	addi	a2,a2,-1920 # 80412b34 <commands+0x1bc>
-804032bc:	16b00593          	li	a1,363
+804032bc:	16900593          	li	a1,361
 804032c0:	00010517          	auipc	a0,0x10
 804032c4:	56450513          	addi	a0,a0,1380 # 80413824 <default_pmm_manager+0x1b4>
 804032c8:	b5cfd0ef          	jal	ra,80400624 <__panic>
@@ -3583,7 +3583,7 @@ Disassembly of section .text:
 804035ac:	27068693          	addi	a3,a3,624 # 80413818 <default_pmm_manager+0x1a8>
 804035b0:	0000f617          	auipc	a2,0xf
 804035b4:	58460613          	addi	a2,a2,1412 # 80412b34 <commands+0x1bc>
-804035b8:	1b300593          	li	a1,435
+804035b8:	1b100593          	li	a1,433
 804035bc:	00010517          	auipc	a0,0x10
 804035c0:	26850513          	addi	a0,a0,616 # 80413824 <default_pmm_manager+0x1b4>
 804035c4:	860fd0ef          	jal	ra,80400624 <__panic>
@@ -3607,7 +3607,7 @@ Disassembly of section .text:
 8040360c:	1f068693          	addi	a3,a3,496 # 804137f8 <default_pmm_manager+0x188>
 80403610:	0000f617          	auipc	a2,0xf
 80403614:	52460613          	addi	a2,a2,1316 # 80412b34 <commands+0x1bc>
-80403618:	19800593          	li	a1,408
+80403618:	19600593          	li	a1,406
 8040361c:	00010517          	auipc	a0,0x10
 80403620:	20850513          	addi	a0,a0,520 # 80413824 <default_pmm_manager+0x1b4>
 80403624:	800fd0ef          	jal	ra,80400624 <__panic>
@@ -3615,7 +3615,7 @@ Disassembly of section .text:
 8040362c:	39468693          	addi	a3,a3,916 # 804139bc <default_pmm_manager+0x34c>
 80403630:	0000f617          	auipc	a2,0xf
 80403634:	50460613          	addi	a2,a2,1284 # 80412b34 <commands+0x1bc>
-80403638:	18400593          	li	a1,388
+80403638:	18200593          	li	a1,386
 8040363c:	00010517          	auipc	a0,0x10
 80403640:	1e850513          	addi	a0,a0,488 # 80413824 <default_pmm_manager+0x1b4>
 80403644:	fe1fc0ef          	jal	ra,80400624 <__panic>
@@ -3623,7 +3623,7 @@ Disassembly of section .text:
 8040364c:	1c068693          	addi	a3,a3,448 # 80413808 <default_pmm_manager+0x198>
 80403650:	0000f617          	auipc	a2,0xf
 80403654:	4e460613          	addi	a2,a2,1252 # 80412b34 <commands+0x1bc>
-80403658:	19900593          	li	a1,409
+80403658:	19700593          	li	a1,407
 8040365c:	00010517          	auipc	a0,0x10
 80403660:	1c850513          	addi	a0,a0,456 # 80413824 <default_pmm_manager+0x1b4>
 80403664:	fc1fc0ef          	jal	ra,80400624 <__panic>
@@ -3643,7 +3643,7 @@ Disassembly of section .text:
 8040369c:	2f868693          	addi	a3,a3,760 # 80413990 <default_pmm_manager+0x320>
 804036a0:	0000f617          	auipc	a2,0xf
 804036a4:	49460613          	addi	a2,a2,1172 # 80412b34 <commands+0x1bc>
-804036a8:	18300593          	li	a1,387
+804036a8:	18100593          	li	a1,385
 804036ac:	00010517          	auipc	a0,0x10
 804036b0:	17850513          	addi	a0,a0,376 # 80413824 <default_pmm_manager+0x1b4>
 804036b4:	f71fc0ef          	jal	ra,80400624 <__panic>
@@ -3705,7 +3705,7 @@ Disassembly of section .text:
 80403784:	0b468693          	addi	a3,a3,180 # 80413834 <default_pmm_manager+0x1c4>
 80403788:	0000f617          	auipc	a2,0xf
 8040378c:	3ac60613          	addi	a2,a2,940 # 80412b34 <commands+0x1bc>
-80403790:	1f200593          	li	a1,498
+80403790:	1f000593          	li	a1,496
 80403794:	00010517          	auipc	a0,0x10
 80403798:	09050513          	addi	a0,a0,144 # 80413824 <default_pmm_manager+0x1b4>
 8040379c:	e89fc0ef          	jal	ra,80400624 <__panic>
@@ -3871,7 +3871,7 @@ Disassembly of section .text:
 80403a14:	00c65793          	srli	a5,a2,0xc
 80403a18:	f4e7e6e3          	bltu	a5,a4,80403964 <print_pgdir+0x1c4>
 80403a1c:	00060693          	mv	a3,a2
-80403a20:	2a000593          	li	a1,672
+80403a20:	29e00593          	li	a1,670
 80403a24:	00010617          	auipc	a2,0x10
 80403a28:	c7c60613          	addi	a2,a2,-900 # 804136a0 <default_pmm_manager+0x30>
 80403a2c:	00010517          	auipc	a0,0x10

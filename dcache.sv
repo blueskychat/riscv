@@ -281,7 +281,7 @@ module dcache (
     // ========================================================================
     // FSM States
     // ========================================================================
-    typedef enum logic [3:0] {
+    typedef enum logic [4:0] {  // Expanded to 5 bits for new states
         IDLE,
         REFILL,         // Legacy: Direct L1 refill from memory (Phase 1-3)
         BYPASS_OP,      // Bypass operation (non-cacheable)
@@ -292,7 +292,9 @@ module dcache (
         L1_VICTIM_WB,   // Phase 5: Write L1 victim dirty data to L2 before L2 eviction
         FLUSH_SCAN,     // FENCE.I: Scan L1 for dirty entries
         FLUSH_L2_WB,    // FENCE.I: Write dirty L1 data to L2 (1 cycle for L2 BRAM read)
-        FLUSH_WB        // FENCE.I: Writeback dirty L1 entry to memory (4 beats)
+        FLUSH_WB,       // FENCE.I: Writeback dirty L1 entry to memory (4 beats)
+        FLUSH_L2_SCAN,  // FENCE.I: Scan L2 for dirty entries (after L1 scan complete)
+        FLUSH_L2_MEM_WB // FENCE.I: Writeback dirty L2 entry to memory (4 beats)
     } state_t;
     
     state_t state, next_state;
@@ -317,11 +319,18 @@ module dcache (
     logic [L1_TAG_WIDTH-1:0] old_tag;
     logic                    is_dirty_eviction;
     
-    // FENCE.I Flush state
+    // FENCE.I Flush state - L1
     logic [L1_INDEX_WIDTH-1:0] flush_idx;        // Current L1 set being scanned
     logic [127:0]              flush_wb_data;    // Data to writeback during flush
     logic [L1_TAG_WIDTH-1:0]   flush_wb_tag;     // Tag for flush writeback address
     logic                      flush_in_progress;// Flush operation is active
+    
+    // FENCE.I Flush state - L2 (new for complete flush)
+    logic [L2_INDEX_WIDTH-1:0] flush_l2_set_idx;  // Current L2 set being scanned
+    logic [1:0]                flush_l2_way_idx;  // Current L2 way being scanned
+    logic [127:0]              flush_l2_wb_data;  // L2 data for memory writeback
+    logic [L2_TAG_WIDTH-1:0]   flush_l2_wb_tag;   // L2 tag for writeback address
+    logic [L2_INDEX_WIDTH-1:0] flush_l2_wb_index; // L2 index for writeback address
     
     // Refill address - use latched address for multi-cycle safety
     // CRITICAL: Must use latched_addr, not mem_req_addr_i, because CPU may
@@ -420,8 +429,8 @@ module dcache (
                 end else begin
                     // Not dirty, advance to next set or finish
                     if (flush_idx == L1_SETS - 1) begin
-                        // All sets scanned, flush complete
-                        next_state = IDLE;
+                        // L1 scan complete - now scan L2 for remaining dirty lines
+                        next_state = FLUSH_L2_SCAN;
                     end
                     // else: stay in FLUSH_SCAN, flush_idx will increment
                 end
@@ -438,11 +447,42 @@ module dcache (
                 if (wb_ack_i && refill_counter == 2'b11) begin
                     // Writeback complete
                     if (flush_idx == L1_SETS - 1) begin
-                        // All sets scanned, flush complete
+                        // L1 scan complete - now scan L2 for remaining dirty lines
+                        next_state = FLUSH_L2_SCAN;
+                    end else begin
+                        // Continue scanning L1
+                        next_state = FLUSH_SCAN;
+                    end
+                end
+            end
+            
+            FLUSH_L2_SCAN: begin
+                // Scan L2 for dirty entries (L1 evictions that are still dirty in L2)
+                // Check if current L2 set/way is dirty
+                if (l2_valid[flush_l2_way_idx][flush_l2_set_idx] && 
+                    l2_dirty[flush_l2_way_idx][flush_l2_set_idx]) begin
+                    // Dirty entry found - writeback to memory
+                    next_state = FLUSH_L2_MEM_WB;
+                end else begin
+                    // Not dirty, advance to next way/set or finish
+                    if (flush_l2_way_idx == L2_WAYS - 1 && flush_l2_set_idx == L2_SETS - 1) begin
+                        // All L2 entries scanned, flush complete
+                        next_state = IDLE;
+                    end
+                    // else: stay in FLUSH_L2_SCAN, counters will increment
+                end
+            end
+            
+            FLUSH_L2_MEM_WB: begin
+                // Writeback dirty L2 entry to memory (4 beats)
+                if (wb_ack_i && refill_counter == 2'b11) begin
+                    // Writeback complete
+                    if (flush_l2_way_idx == L2_WAYS - 1 && flush_l2_set_idx == L2_SETS - 1) begin
+                        // All L2 entries scanned, flush complete
                         next_state = IDLE;
                     end else begin
-                        // Continue scanning
-                        next_state = FLUSH_SCAN;
+                        // Continue scanning L2
+                        next_state = FLUSH_L2_SCAN;
                     end
                 end
             end
@@ -521,9 +561,9 @@ module dcache (
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             refill_counter <= 2'b00;
-        end else if (state != REFILL && state != L2_REFILL && state != L2_WRITEBACK && state != FLUSH_WB) begin
+        end else if (state != REFILL && state != L2_REFILL && state != L2_WRITEBACK && state != FLUSH_WB && state != FLUSH_L2_MEM_WB) begin
             refill_counter <= 2'b00;
-        end else if ((state == REFILL || state == L2_REFILL || state == L2_WRITEBACK || state == FLUSH_WB) && wb_ack_i) begin
+        end else if ((state == REFILL || state == L2_REFILL || state == L2_WRITEBACK || state == FLUSH_WB || state == FLUSH_L2_MEM_WB) && wb_ack_i) begin
             refill_counter <= refill_counter + 2'b01;
         end
     end
@@ -537,6 +577,11 @@ module dcache (
             flush_in_progress <= 1'b0;
             flush_wb_data <= 128'h0;
             flush_wb_tag <= '0;
+            flush_l2_set_idx <= '0;
+            flush_l2_way_idx <= '0;
+            flush_l2_wb_data <= 128'h0;
+            flush_l2_wb_tag <= '0;
+            flush_l2_wb_index <= '0;
         end else begin
             // Entering FLUSH_SCAN from IDLE
             if (state == IDLE && next_state == FLUSH_SCAN) begin
@@ -556,15 +601,67 @@ module dcache (
             else if (state == FLUSH_WB && next_state == FLUSH_SCAN) begin
                 flush_idx <= flush_idx + 1'b1;
             end
+            // Entering FLUSH_L2_SCAN from L1 flush completion
+            else if ((state == FLUSH_SCAN || state == FLUSH_WB) && next_state == FLUSH_L2_SCAN) begin
+                flush_l2_set_idx <= '0;
+                flush_l2_way_idx <= '0;
+            end
+            // In FLUSH_L2_SCAN, advancing to next way/set if current is clean
+            else if (state == FLUSH_L2_SCAN && next_state == FLUSH_L2_SCAN) begin
+                if (flush_l2_way_idx == L2_WAYS - 1) begin
+                    flush_l2_way_idx <= '0;
+                    flush_l2_set_idx <= flush_l2_set_idx + 1'b1;
+                end else begin
+                    flush_l2_way_idx <= flush_l2_way_idx + 1'b1;
+                end
+            end
+            // Entering FLUSH_L2_MEM_WB - latch L2 data for memory writeback
+            else if (state == FLUSH_L2_SCAN && next_state == FLUSH_L2_MEM_WB) begin
+                // Need to read L2 BRAM data - use registered values
+                // Since L2 is BRAM, we latch the index/way to read next cycle
+                flush_l2_wb_index <= flush_l2_set_idx;
+                flush_l2_wb_tag   <= l2_tag_way0[flush_l2_set_idx]; // Will be overwritten based on way
+                case (flush_l2_way_idx)
+                    2'b00: begin
+                        flush_l2_wb_data <= l2_data_way0[flush_l2_set_idx];
+                        flush_l2_wb_tag  <= l2_tag_way0[flush_l2_set_idx];
+                    end
+                    2'b01: begin
+                        flush_l2_wb_data <= l2_data_way1[flush_l2_set_idx];
+                        flush_l2_wb_tag  <= l2_tag_way1[flush_l2_set_idx];
+                    end
+                    2'b10: begin
+                        flush_l2_wb_data <= l2_data_way2[flush_l2_set_idx];
+                        flush_l2_wb_tag  <= l2_tag_way2[flush_l2_set_idx];
+                    end
+                    2'b11: begin
+                        flush_l2_wb_data <= l2_data_way3[flush_l2_set_idx];
+                        flush_l2_wb_tag  <= l2_tag_way3[flush_l2_set_idx];
+                    end
+                endcase
+            end
+            // After FLUSH_L2_MEM_WB completes, advance to next way/set (in FLUSH_L2_SCAN)
+            else if (state == FLUSH_L2_MEM_WB && next_state == FLUSH_L2_SCAN) begin
+                if (flush_l2_way_idx == L2_WAYS - 1) begin
+                    flush_l2_way_idx <= '0;
+                    flush_l2_set_idx <= flush_l2_set_idx + 1'b1;
+                end else begin
+                    flush_l2_way_idx <= flush_l2_way_idx + 1'b1;
+                end
+            end
             // Flush complete - return to IDLE
-            else if ((state == FLUSH_SCAN || state == FLUSH_WB || state == FLUSH_L2_WB) && next_state == IDLE) begin
+            else if ((state == FLUSH_SCAN || state == FLUSH_WB || state == FLUSH_L2_WB || 
+                      state == FLUSH_L2_SCAN || state == FLUSH_L2_MEM_WB) && next_state == IDLE) begin
                 flush_in_progress <= 1'b0;
             end
         end
     end
     
     // Flush done output - asserted for one cycle when flush completes
-    assign flush_done_o = flush_in_progress && (state == FLUSH_SCAN || state == FLUSH_WB) && next_state == IDLE;
+    assign flush_done_o = flush_in_progress && 
+                          (state == FLUSH_SCAN || state == FLUSH_WB || 
+                           state == FLUSH_L2_SCAN || state == FLUSH_L2_MEM_WB) && 
+                          next_state == IDLE;
 
     // ========================================================================
     // Refill Data Accumulation
@@ -952,6 +1049,9 @@ module dcache (
             // FLUSH_L2_WB: Update L2 with dirty L1 data, set dirty=0 (will write to memory next)
             l2_dirty[flush_l2_target_way][flush_l2_idx_latched] <= 1'b0;
             l2_lru[flush_l2_idx_latched] <= update_lru(l2_lru[flush_l2_idx_latched], flush_l2_target_way);
+        end else if (state == FLUSH_L2_MEM_WB && wb_ack_i && refill_counter == 2'b11) begin
+            // FLUSH_L2_MEM_WB complete: Clear dirty bit for the L2 line just written to memory
+            l2_dirty[flush_l2_way_idx][flush_l2_set_idx] <= 1'b0;
         end
     end
     
@@ -1133,8 +1233,25 @@ module dcache (
                 endcase
             end
             
+            FLUSH_L2_MEM_WB: begin
+                // FENCE.I: Write dirty L2 entry to memory (4 beats)
+                wb_adr_o = {flush_l2_wb_tag, flush_l2_wb_index, 4'b0000} + {28'b0, refill_counter, 2'b00};
+                wb_we_o  = 1'b1;
+                wb_sel_o = 4'b1111;
+                wb_stb_o = 1'b1;
+                wb_cyc_o = 1'b1;
+                
+                // Select word to write from flushed L2 data
+                case (refill_counter)
+                    2'b00: wb_dat_o = flush_l2_wb_data[31:0];
+                    2'b01: wb_dat_o = flush_l2_wb_data[63:32];
+                    2'b10: wb_dat_o = flush_l2_wb_data[95:64];
+                    2'b11: wb_dat_o = flush_l2_wb_data[127:96];
+                endcase
+            end
+            
             default: begin
-                // IDLE, L1_TO_L2, L2_LOOKUP, FLUSH_SCAN - no wishbone activity
+                // IDLE, L1_TO_L2, L2_LOOKUP, FLUSH_SCAN, FLUSH_L2_SCAN - no wishbone activity
             end
         endcase
     end

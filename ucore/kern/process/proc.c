@@ -248,6 +248,44 @@ proc_run(struct proc_struct *proc) {
 //       after switch_to, the current proc will execute here.
 static void
 forkret(void) {
+    // DEBUG: Print satp/sepc/UTEXT PTE before sret
+    if (current->mm != NULL) {
+        pte_t *ptep = get_pte(current->mm->pgdir, UTEXT, 0);
+        pte_t *ptep2 = get_pte(current->mm->pgdir, UTEXT + PGSIZE, 0);  // Second page
+        cprintf("[FORKRET] PID=%d satp=0x%08x sepc=0x%08x cr3=0x%08x\n",
+                current->pid, read_csr(satp), current->tf->epc, current->cr3);
+        cprintf("[FORKRET] PID=%d tf->status=0x%08x SPP=%d SIE=%d SPIE=%d\n",
+                current->pid, current->tf->status,
+                (current->tf->status >> 8) & 1,   // SPP
+                (current->tf->status >> 1) & 1,   // SIE
+                (current->tf->status >> 5) & 1);  // SPIE
+        if (ptep && (*ptep & PTE_V)) {
+            uintptr_t pa = PTE_ADDR(*ptep);
+            // Read back instruction at offset 0x2d0 (where sepc points)
+            volatile uint32_t *instr_ptr = (volatile uint32_t *)(pa + 0x2d0);
+            uint32_t instr_val = *instr_ptr;
+            cprintf("[FORKRET] PID=%d UTEXT PTE=0x%08x PA=0x%08x\n",
+                    current->pid, *ptep, pa);
+            cprintf("[FORKRET] PID=%d PA+0x2d0 instr=0x%08x (expect 0x00a12c23)\n",
+                    current->pid, instr_val);
+        } else {
+            cprintf("[FORKRET] PID=%d UTEXT PTE invalid!\n", current->pid);
+        }
+        // DEBUG: Check second user page (0x00801000) - this is where the problem occurs
+        if (ptep2 && (*ptep2 & PTE_V)) {
+            uintptr_t pa2 = PTE_ADDR(*ptep2);
+            volatile uint32_t *instr_ptr2 = (volatile uint32_t *)(pa2 + 0x2e4);  // offset 0x12e4 - 0x1000
+            uint32_t instr_val2 = *instr_ptr2;
+            cprintf("[FORKRET] PID=%d UTEXT+0x1000 PTE=0x%08x PA=0x%08x\n",
+                    current->pid, *ptep2, pa2);
+            cprintf("[FORKRET] PID=%d PA+0x2e4 instr=0x%08x\n",
+                    current->pid, instr_val2);
+        } else {
+            cprintf("[FORKRET] PID=%d UTEXT+0x1000 (0x00801000) PTE INVALID or MISSING!\n", current->pid);
+        }
+    }
+    // DEBUG: Print tf address and marker before calling forkrets
+    cprintf("[FORKRET] PID=%d tf=0x%08x -> calling forkrets\n", current->pid, (uintptr_t)current->tf);
     forkrets(current->tf);
 }
 
@@ -362,11 +400,27 @@ copy_mm(uint32_t clone_flags, struct proc_struct *proc) {
     if (ret != 0) {
         goto bad_dup_cleanup_mmap;
     }
+    
+    // CRITICAL: Flush DCache to ensure memcpy'd code pages are written to memory
+    // before child process tries to fetch instructions. Must be done HERE while
+    // we're still using the kernel page table, not in forkrets where child's
+    // page table is active (which may not have UART/debug mappings).
+    asm volatile("fence.i");
 
 good_mm:
     mm_count_inc(mm);
     proc->mm = mm;
     proc->cr3 = PADDR(mm->pgdir);
+    
+    // DEBUG: Print child UTEXT PTE after copy_mm
+    if (!(clone_flags & CLONE_VM)) {
+        pte_t *ptep = get_pte(mm->pgdir, UTEXT, 0);
+        if (ptep && (*ptep & PTE_V)) {
+            cprintf("[FORK-MM] child UTEXT PTE=0x%08x PA=0x%08x cr3=0x%08x\n",
+                    *ptep, PTE_ADDR(*ptep), proc->cr3);
+        }
+    }
+    
     return 0;
 bad_dup_cleanup_mmap:
     exit_mmap(mm);
@@ -768,6 +822,23 @@ load_icode(int fd, int argc, char **kargv) {
     tf->gpr.sp = stacktop;
     tf->epc = elf->e_entry;
     tf->status = sstatus & ~(SSTATUS_SPP | SSTATUS_SPIE);
+    
+    // DEBUG: Print UTEXT PTE after load_icode
+    {
+        pte_t *ptep = get_pte(mm->pgdir, UTEXT, 0);
+        if (ptep && (*ptep & PTE_V)) {
+            cprintf("[EXEC] PID=%d UTEXT=0x%08x PTE=0x%08x PA=0x%08x entry=0x%08x\n",
+                    current->pid, UTEXT, *ptep, PTE_ADDR(*ptep), elf->e_entry);
+        } else {
+            cprintf("[EXEC] PID=%d UTEXT PTE invalid or not found!\n", current->pid);
+        }
+    }
+    
+    // Ensure TLB is flushed for the new mapping
+    // TODO: fence.i causes page faults - need to debug hardware implementation
+    // Using sfence.vma as temporary workaround (does NOT fix DCache coherency!)
+    asm volatile("sfence.vma");
+    
     ret = 0;
 out:
     return ret;
