@@ -487,62 +487,32 @@ module testbench;
         timer_int_last <= dut.timer_interrupt;
     end
     */
-    // ============================================================================
-    // ENABLED: Monitor SRET to fork child entry (sepc = 0x008002d0)
-    // ============================================================================
+    /*
+    // Monitor mret/sret execution - only show non-SBI-handler returns
     integer sret_count = 0;
-    logic fork_child_sret = 0;
-    integer post_sret_cycles = 0;
-    
     always @(posedge clk_50M) begin
+        // MRET: only show if NOT returning to SBI ecall handler (0x804008b8)
+        if (dut.u_csr.mret_exec && dut.mepc_out != 32'h804008b8) begin
+            $display("[%0t] MRET executed: returning to PC=0x%08h, new_priv=%0d",
+                     $time, dut.mepc_out, dut.u_csr.mstatus[12:11]);
+        end
+        // Debug: Check if ex_sret is ever asserted
+        if (dut.ex_sret) begin
+            $display("[%0t] ex_sret ASSERTED: mem_stall=%0d, sret_exec will be %0d",
+                     $time, dut.mem_stall, dut.ex_sret && !dut.mem_stall);
+        end
         if (dut.u_csr.sret_exec) begin
             sret_count = sret_count + 1;
-            
-            // ONLY track SRET to fork child entry (0x008002d0) or user address space
-            if (dut.sepc_out[31:12] == 20'h00800) begin
-                fork_child_sret = 1;
-                post_sret_cycles = 0;
-                $display("");
-                $display("[%0t] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", $time);
-                $display("[%0t] !!! SRET TO USER CODE: sepc=0x%08h SPP=%0d !!!", $time, dut.sepc_out, dut.u_csr.sstatus[8]);
-                $display("[%0t] !!! satp=0x%08h paging=%0d !!!", $time, dut.satp_out, dut.paging_enabled);
-                $display("[%0t] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", $time);
-            end
-        end
-        
-        // Track what happens after SRET to user code for 500 cycles
-        if (fork_child_sret) begin
-            post_sret_cycles = post_sret_cycles + 1;
-            
-            // Detect jump to second user page (0x00801xxx) - this is the key issue
-            if (dut.pc[31:12] == 20'h00801) begin
-                $display("[%0t] FORK+%03d: !!! JUMP TO 2ND PAGE !!! PC=0x%08h inst=0x%08h",
-                         $time, post_sret_cycles, dut.pc, dut.if_id_reg.inst);
-            end
-            
-            // Only print every 10 cycles to reduce output, or on important events
-            if (post_sret_cycles % 10 == 0 || post_sret_cycles <= 5 || dut.trap_enter ||
-                dut.pc[31:12] == 20'h00801) begin
-                $display("[%0t] FORK+%03d: PC=0x%08h inst=0x%08h priv=%0d if_stall=%0d mem_stall=%0d",
-                         $time, post_sret_cycles, dut.pc, dut.if_id_reg.inst, dut.priv_mode,
-                         dut.if_stall_req, dut.mem_stall_req);
-            end
-            // Check for trap
-            if (dut.trap_enter) begin
-                $display("[%0t] !!! TRAP: cause=0x%08h pc=0x%08h val=0x%08h", $time, dut.trap_cause, dut.trap_pc, dut.trap_val);
-                fork_child_sret = 0;
-            end
-            if (post_sret_cycles >= 500) begin
-                $display("[%0t] Tracking ended after 500 cycles. Final: PC=0x%08h priv=%0d if_stall=%0d mem_stall=%0d", 
-                         $time, dut.pc, dut.priv_mode, dut.if_stall_req, dut.mem_stall_req);
-                fork_child_sret = 0;
-            end
+            // Show more detail: sepc, SPP before SRET
+            $display("[%0t] SRET #%0d: sepc=0x%08h SPP=%0d -> going to priv=%0d",
+                     $time, sret_count, dut.sepc_out, dut.u_csr.sstatus[8], 
+                     dut.u_csr.sstatus[8] ? 1 : 0);
         end
     end
 
-    /*
+
     // ============================================================================
-    // DISABLED: Monitor privilege mode transitions (too noisy)
+    // Critical: Monitor privilege mode transitions
     // ============================================================================
     logic [1:0] last_priv = 2'b11;
     integer u_mode_entry_count = 0;
@@ -550,12 +520,12 @@ module testbench;
     
     always @(posedge clk_50M) begin
         if (dut.priv_mode != last_priv) begin
-            $display("[%0t] [HW-MON] PRIVILEGE CHANGE: %0d -> %0d (0=U, 1=S, 3=M) at PC=0x%08h",
-                     $time, last_priv, dut.priv_mode, dut.pc);
+            $display("[%0t] PRIVILEGE CHANGE: %0d -> %0d (0=U, 1=S, 3=M) at PC=0x%08h sscratch=0x%08h",
+                     $time, last_priv, dut.priv_mode, dut.pc, dut.u_csr.sscratch);
             if (dut.priv_mode == 2'b00) begin
                 u_mode_entry_count = u_mode_entry_count + 1;
-                $display("[%0t] [HW-MON] *** ENTERED USER MODE *** (entry #%0d)",
-                         $time, u_mode_entry_count);
+                $display("[%0t] *** ENTERED USER MODE *** (entry #%0d) sscratch=0x%08h (should be kernel stack!)",
+                         $time, u_mode_entry_count, dut.u_csr.sscratch);
             end
             last_priv <= dut.priv_mode;
         end
@@ -563,20 +533,7 @@ module testbench;
         // Count U-mode ecalls (cause = 0x8)
         if (dut.trap_enter && dut.trap_cause == 32'h00000008) begin
             u_mode_ecall_count = u_mode_ecall_count + 1;
-            $display("[%0t] [HW-MON] U-MODE ECALL #%0d from PC=0x%08h", $time, u_mode_ecall_count, dut.trap_pc);
-        end
-    end
-    
-    // ============================================================================
-    // DISABLED: Monitor IMMU/ICache state for user address fetches (too noisy)
-    // ============================================================================
-    logic [31:0] last_reported_pc = 0;
-    always @(posedge clk_50M) begin
-        // Report when fetching from user address space (0x008xxxxx)
-        if (dut.pc[31:20] == 12'h008 && dut.pc != last_reported_pc) begin
-            $display("[%0t] [HW-MON] FETCH USER VA: PC=0x%08h if_stall=%0d",
-                     $time, dut.pc, dut.if_stall_req);
-            last_reported_pc = dut.pc;
+            $display("[%0t] U-MODE ECALL #%0d from PC=0x%08h", $time, u_mode_ecall_count, dut.trap_pc);
         end
     end
     */
