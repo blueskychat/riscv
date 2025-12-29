@@ -56,7 +56,7 @@ idt_init(void) {
     /* Allow kernel to access user memory */
     set_csr(sstatus, SSTATUS_SUM);
     /* Allow keyboard interrupt */
-    set_csr(sie, MIP_SSIP);
+    set_csr(sie, MIP_SSIP | MIP_SEIP);
 }
 
 /* trap_in_kernel - test if trap happened in kernel */
@@ -180,7 +180,12 @@ void interrupt_handler(struct trapframe *tf) {
             run_timer_list();
 
             serial_intr();
-            dev_stdin_write(cons_getc());
+            {
+                int c;
+                while((c = cons_getc()) != 0) {
+                    dev_stdin_write(c);
+                }
+            }
             break;
         case IRQ_H_TIMER:
             cprintf("Hypervisor software interrupt\n");
@@ -193,6 +198,13 @@ void interrupt_handler(struct trapframe *tf) {
             break;
         case IRQ_S_EXT:
             cprintf("Supervisor external interrupt\n");
+            serial_intr();
+            {
+                int c;
+                while((c = cons_getc()) != 0) {
+                    dev_stdin_write(c);
+                }
+            }
             break;
         case IRQ_H_EXT:
             cprintf("Hypervisor external interrupt\n");

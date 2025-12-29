@@ -842,9 +842,14 @@ failed_cleanup:
 //           - call load_icode to setup new memory space accroding binary prog.
 int
 do_execve(const char *name, int argc, const char **argv) {
+    cprintf("[DBG-EXECVE] enter: pid=%d, argc=%d\n", current->pid, argc);
+    if (argc > 0) {
+        cprintf("[DBG-EXECVE] argv[0]=0x%08x\n", (uintptr_t)argv[0]);
+    }
     static_assert(EXEC_MAX_ARG_LEN >= FS_MAX_FPATH_LEN);
     struct mm_struct *mm = current->mm;
     if (!(argc >= 1 && argc <= EXEC_MAX_ARG_NUM)) {
+        cprintf("[DBG-EXECVE] argc invalid\n");
         return -E_INVAL;
     }
 
@@ -876,9 +881,12 @@ do_execve(const char *name, int argc, const char **argv) {
 
     /* sysfile_open will check the first argument path, thus we have to use a user-space pointer, and argv[0] may be incorrect */    
     int fd;
+    cprintf("[DBG-EXECVE] calling sysfile_open for path\n");
     if ((ret = fd = sysfile_open(path, O_RDONLY)) < 0) {
+        cprintf("[DBG-EXECVE] sysfile_open failed: %d\n", ret);
         goto execve_exit;
     }
+    cprintf("[DBG-EXECVE] sysfile_open succeeded, fd=%d\n", fd);
     if (mm != NULL) {
         lcr3(boot_cr3);
         if (mm_count_dec(mm) == 0) {
@@ -889,14 +897,19 @@ do_execve(const char *name, int argc, const char **argv) {
         current->mm = NULL;
     }
     ret= -E_NO_MEM;;
+    cprintf("[DBG-EXECVE] calling load_icode\n");
     if ((ret = load_icode(fd, argc, kargv)) != 0) {
+        cprintf("[DBG-EXECVE] load_icode failed: %d\n", ret);
         goto execve_exit;
     }
+    cprintf("[DBG-EXECVE] load_icode succeeded\n");
     put_kargv(argc, kargv);
     set_proc_name(current, local_name);
+    cprintf("[DBG-EXECVE] returning from do_execve\n");
     return 0;
 
 execve_exit:
+    cprintf("[DBG-EXECVE] execve_exit path, ret=%d\n", ret);
     put_kargv(argc, kargv);
     do_exit(ret);
     panic("already exit: %e.\n", ret);
@@ -1128,12 +1141,25 @@ proc_init(void) {
 }
 
 // cpu_idle - at the end of kern_init, the first kernel thread idleproc will do below works
-void
-cpu_idle(void) {
+void cpu_idle(void) {
     while (1) {
         if (current->need_resched) {
             schedule();
         }
+        
+        // POLLING WORKAROUND:
+        // Since Supervisor External Interrupts are not working reliably,
+        // we poll the console whenever the CPU is idle.
+        // This ensures we catch characters even if the buffer is small.
+        serial_intr();
+        int c;
+        while ((c = cons_getc()) != 0) {
+            dev_stdin_write(c);
+        }
+        
+        // Don't sleep too deep - on real hardware wfi might wait for interrupt
+        // but here we want to poll.
+        // asm volatile ("wfi"); 
     }
 }
 

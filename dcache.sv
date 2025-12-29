@@ -294,6 +294,7 @@ module dcache (
         FLUSH_L2_WB,    // FENCE.I: Write dirty L1 data to L2 (1 cycle for L2 BRAM read)
         FLUSH_WB,       // FENCE.I: Writeback dirty L1 entry to memory (4 beats)
         FLUSH_L2_SCAN,  // FENCE.I: Scan L2 for dirty entries (after L1 scan complete)
+        FLUSH_L2_RD,    // FENCE.I: Wait for L2 BRAM read (1 cycle latency)
         FLUSH_L2_MEM_WB // FENCE.I: Writeback dirty L2 entry to memory (4 beats)
     } state_t;
     
@@ -461,8 +462,11 @@ module dcache (
                 // Check if current L2 set/way is dirty
                 if (l2_valid[flush_l2_way_idx][flush_l2_set_idx] && 
                     l2_dirty[flush_l2_way_idx][flush_l2_set_idx]) begin
-                    // Dirty entry found - writeback to memory
-                    next_state = FLUSH_L2_MEM_WB;
+                    // Dirty entry found - go to FLUSH_L2_RD to wait for BRAM read
+                    // CRITICAL FIX: Cannot go directly to FLUSH_L2_MEM_WB because
+                    // L2 BRAM has 1-cycle read latency. Must trigger read here and
+                    // wait 1 cycle for data to be available.
+                    next_state = FLUSH_L2_RD;
                 end else begin
                     // Not dirty, advance to next way/set or finish
                     if (flush_l2_way_idx == L2_WAYS - 1 && flush_l2_set_idx == L2_SETS - 1) begin
@@ -471,6 +475,12 @@ module dcache (
                     end
                     // else: stay in FLUSH_L2_SCAN, counters will increment
                 end
+            end
+            
+            FLUSH_L2_RD: begin
+                // Wait 1 cycle for L2 BRAM read to complete
+                // Data is now in l2_data_read[], latch it and proceed to writeback
+                next_state = FLUSH_L2_MEM_WB;
             end
             
             FLUSH_L2_MEM_WB: begin
@@ -615,28 +625,29 @@ module dcache (
                     flush_l2_way_idx <= flush_l2_way_idx + 1'b1;
                 end
             end
-            // Entering FLUSH_L2_MEM_WB - latch L2 data for memory writeback
-            else if (state == FLUSH_L2_SCAN && next_state == FLUSH_L2_MEM_WB) begin
-                // Need to read L2 BRAM data - use registered values
-                // Since L2 is BRAM, we latch the index/way to read next cycle
+            // Entering FLUSH_L2_MEM_WB from FLUSH_L2_RD - latch L2 data from BRAM read results
+            // CRITICAL FIX: Use l2_data_read[] and l2_tag_read[] (registered BRAM outputs)
+            // instead of direct BRAM array access (l2_data_wayX[])
+            else if (state == FLUSH_L2_RD && next_state == FLUSH_L2_MEM_WB) begin
+                // BRAM read completed in previous cycle, data is now in l2_data_read[]
                 flush_l2_wb_index <= flush_l2_set_idx;
-                flush_l2_wb_tag   <= l2_tag_way0[flush_l2_set_idx]; // Will be overwritten based on way
+                // Use registered BRAM read outputs
                 case (flush_l2_way_idx)
                     2'b00: begin
-                        flush_l2_wb_data <= l2_data_way0[flush_l2_set_idx];
-                        flush_l2_wb_tag  <= l2_tag_way0[flush_l2_set_idx];
+                        flush_l2_wb_data <= l2_data_read[0];
+                        flush_l2_wb_tag  <= l2_tag_read[0];
                     end
                     2'b01: begin
-                        flush_l2_wb_data <= l2_data_way1[flush_l2_set_idx];
-                        flush_l2_wb_tag  <= l2_tag_way1[flush_l2_set_idx];
+                        flush_l2_wb_data <= l2_data_read[1];
+                        flush_l2_wb_tag  <= l2_tag_read[1];
                     end
                     2'b10: begin
-                        flush_l2_wb_data <= l2_data_way2[flush_l2_set_idx];
-                        flush_l2_wb_tag  <= l2_tag_way2[flush_l2_set_idx];
+                        flush_l2_wb_data <= l2_data_read[2];
+                        flush_l2_wb_tag  <= l2_tag_read[2];
                     end
                     2'b11: begin
-                        flush_l2_wb_data <= l2_data_way3[flush_l2_set_idx];
-                        flush_l2_wb_tag  <= l2_tag_way3[flush_l2_set_idx];
+                        flush_l2_wb_data <= l2_data_read[3];
+                        flush_l2_wb_tag  <= l2_tag_read[3];
                     end
                 endcase
             end
@@ -738,6 +749,11 @@ module dcache (
         end else if (state == FLUSH_SCAN && next_state == FLUSH_L2_WB) begin
             // Read L2 to find which way holds the flush line
             l2_bram_rd_addr = flush_l2_idx;
+            l2_bram_rd_en = 1'b1;
+        end else if (state == FLUSH_L2_SCAN && next_state == FLUSH_L2_RD) begin
+            // CRITICAL FIX: Trigger L2 BRAM read when dirty L2 entry is found
+            // The data will be available next cycle in FLUSH_L2_RD state
+            l2_bram_rd_addr = flush_l2_set_idx;
             l2_bram_rd_en = 1'b1;
         end
     end
@@ -1359,5 +1375,39 @@ module dcache (
             ptw_ack_o  <= ptw_ack_comb;
         end
     end
+
+    // ========================================================================
+    // DEBUG: L2 Flush Path Trace (仿真验证 BRAM 读取时序)
+    // ========================================================================
+    `ifdef SIMU
+    always @(posedge clk) begin
+        // Monitor state transitions in L2 flush path
+        if (state == FLUSH_L2_SCAN && next_state == FLUSH_L2_RD) begin
+            $display("[DCACHE-L2FLUSH] FLUSH_L2_SCAN -> FLUSH_L2_RD: set=%0d way=%0d", 
+                     flush_l2_set_idx, flush_l2_way_idx);
+            $display("  l2_bram_rd_en=%0d (should be 1 now!)", l2_bram_rd_en);
+        end
+        
+        // Monitor FLUSH_L2_RD -> FLUSH_L2_MEM_WB transition (data latching)
+        if (state == FLUSH_L2_RD && next_state == FLUSH_L2_MEM_WB) begin
+            $display("[DCACHE-L2FLUSH] FLUSH_L2_RD -> FLUSH_L2_MEM_WB: latching data from l2_data_read");
+            $display("  l2_data_read[%0d][31:0]=0x%08h", flush_l2_way_idx, 
+                     flush_l2_way_idx == 0 ? l2_data_read[0][31:0] :
+                     flush_l2_way_idx == 1 ? l2_data_read[1][31:0] :
+                     flush_l2_way_idx == 2 ? l2_data_read[2][31:0] : l2_data_read[3][31:0]);
+        end
+        
+        // Monitor FLUSH_L2_MEM_WB memory writes (first beat only for brevity)
+        if (state == FLUSH_L2_MEM_WB && wb_stb_o && wb_ack_i && refill_counter == 0) begin
+            $display("[DCACHE-L2FLUSH] L2 WB: addr=0x%08h data=0x%08h",
+                     wb_adr_o, wb_dat_o);
+        end
+        
+        // Summary when L2 flush completes
+        if ((state == FLUSH_L2_SCAN || state == FLUSH_L2_MEM_WB) && next_state == IDLE) begin
+            $display("[DCACHE-L2FLUSH] === L2 Flush Complete ===");
+        end
+    end
+    `endif
 
 endmodule

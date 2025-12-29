@@ -66,6 +66,11 @@ wakeup_proc(struct proc_struct *proc) {
             proc->wait_state = 0;
             if (proc != current) {
                 sched_class_enqueue(proc);
+                // WORKAROUND: If we are in idleproc (polling loop), 
+                // switch immediately to the awakened process to handle input.
+                if (current == idleproc) {
+                    current->need_resched = 1;
+                }
             }
         }
         else {

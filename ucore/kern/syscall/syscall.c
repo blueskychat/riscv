@@ -14,6 +14,7 @@
 static int
 sys_exit(uint32_t arg[]) {
     int error_code = (int)arg[0];
+    cprintf("[SYSCALL] sys_exit: pid=%d, error_code=%d\n", current->pid, error_code);
     return do_exit(error_code);
 }
 
@@ -21,14 +22,20 @@ static int
 sys_fork(uint32_t arg[]) {
     struct trapframe *tf = current->tf;
     uintptr_t stack = tf->gpr.sp;
-    return do_fork(0, stack, tf);
+    cprintf("[SYSCALL] sys_fork: parent_pid=%d\n", current->pid);
+    int ret = do_fork(0, stack, tf);
+    cprintf("[SYSCALL] sys_fork: parent_pid=%d, child_pid=%d\n", current->pid, ret);
+    return ret;
 }
 
 static int
 sys_wait(uint32_t arg[]) {
     int pid = (int)arg[0];
     int *store = (int *)arg[1];
-    return do_wait(pid, store);
+    cprintf("[SYSCALL] sys_wait: caller_pid=%d, waiting_for_pid=%d\n", current->pid, pid);
+    int ret = do_wait(pid, store);
+    cprintf("[SYSCALL] sys_wait: caller_pid=%d, returned=%d\n", current->pid, ret);
+    return ret;
 }
 
 static int
@@ -36,6 +43,15 @@ sys_exec(uint32_t arg[]) {
     const char *name = (const char *)arg[0];
     int argc = (int)arg[1];
     const char **argv = (const char **)arg[2];
+    cprintf("[SYSCALL] sys_exec: pid=%d, argc=%d, name_ptr=%p\n", current->pid, argc, name);
+    // Print name string if possible
+    struct mm_struct *mm = current->mm;
+    if (user_mem_check(mm, (uintptr_t)name, 16, 0)) { // Check a small chunk
+        cprintf("[SYSCALL] sys_exec name: %s\n", name);
+        cprintf("[SYSCALL] sys_exec name hex: ");
+        for(int i=0; i<16 && name[i]; i++) cprintf("%02x ", (unsigned char)name[i]);
+        cprintf("\n");
+    }
     return do_execve(name, argc, argv);
 }
 
@@ -104,7 +120,20 @@ sys_read(uint32_t arg[]) {
     int fd = (int)arg[0];
     void *base = (void *)arg[1];
     size_t len = (size_t)arg[2];
-    return sysfile_read(fd, base, len);
+    int ret = sysfile_read(fd, base, len);
+    if (fd == 0 && ret > 0) {
+        cprintf("[SYSCALL] sys_read(stdin): len=%d, content: ", ret);
+        char *buf = (char *)base;
+        // Verify buffer is valid user memory before printing
+        struct mm_struct *mm = current->mm;
+        if (user_mem_check(mm, (uintptr_t)base, ret, 0)) {
+             for(int i=0; i<ret && i<16; i++) cprintf("%02x ", (unsigned char)buf[i]);
+        } else {
+             cprintf("(invalid user mem)");
+        }
+        cprintf("\n");
+    }
+    return ret;
 }
 
 static int

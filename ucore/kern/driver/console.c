@@ -38,6 +38,10 @@ int serial_proc_data(void) {
     if (c < 0) {
         return -1;
     }
+    // Debug raw input
+    if (c != 0) {
+        cprintf("[CONS] raw: %02x\n", c);
+    }
     if (c == 127) {
         c = '\b';
     }
@@ -71,6 +75,7 @@ void cons_putc(int c) {
     local_intr_save(intr_flag);
     {
         serial_putc(c);
+        serial_intr(); // Poll input while printing to avoid dropping characters
     }
     local_intr_restore(intr_flag);
 }
@@ -95,6 +100,7 @@ int cons_getc(void) {
             if (cons.rpos == CONSBUFSIZE) {
                 cons.rpos = 0;
             }
+            cprintf("[CONS] getc: %02x, rpos=%d, wpos=%d\n", c, cons.rpos, cons.wpos);
         }
     }
     local_intr_restore(intr_flag);
