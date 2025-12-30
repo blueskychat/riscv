@@ -75,9 +75,6 @@
 #define KERN_ACCESS(start, end)                     \
 (KERNBASE <= (start) && (start) < (end) && (end) <= KERNTOP)
 
-#define UART0_BASE 0x10000000
-#define UART0_CTX_SIZE 0x1000
-
 #ifndef __ASSEMBLER__
 
 #include <defs.h>

@@ -180,12 +180,7 @@ void interrupt_handler(struct trapframe *tf) {
             run_timer_list();
 
             serial_intr();
-            {
-                int c;
-                while((c = cons_getc()) != 0) {
-                    dev_stdin_write(c);
-                }
-            }
+            dev_stdin_write(cons_getc());
             break;
         case IRQ_H_TIMER:
             cprintf("Hypervisor software interrupt\n");
@@ -198,13 +193,6 @@ void interrupt_handler(struct trapframe *tf) {
             break;
         case IRQ_S_EXT:
             cprintf("Supervisor external interrupt\n");
-            serial_intr();
-            {
-                int c;
-                while((c = cons_getc()) != 0) {
-                    dev_stdin_write(c);
-                }
-            }
             break;
         case IRQ_H_EXT:
             cprintf("Hypervisor external interrupt\n");

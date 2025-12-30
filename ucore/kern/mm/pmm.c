@@ -226,9 +226,7 @@ void pmm_init(void) {
     // boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, 0, PTE_W);
     boot_map_segment(boot_pgdir, KERNBASE, KMEMSIZE, PADDR(KERNBASE),
                      READ_WRITE_EXEC);
-    // Map UART0 for direct access (fix blocking SBI issue)
-    //boot_map_segment(boot_pgdir, UART0_BASE, UART0_CTX_SIZE, UART0_BASE, READ_WRITE);
-    
+
     enable_paging();
 
     // now the basic virtual memory map(see memalyout.h) is established.
@@ -427,23 +425,7 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
             void *kva_src = page2kva(page);
             void *kva_dst = page2kva(npage);
 
-            // CRITICAL: Flush DCache BEFORE reading parent's data via kernel VA
-            asm volatile("fence.i");
-            
-            // DEBUG: Print first 16 bytes of ALL copied pages
-            {
-                uint8_t *src = (uint8_t *)kva_src;
-                if (start >= 0x80000000 && start < 0x80002000) { // user stack or data
-                    cprintf("[COPY] VA=0x%08x: ", start);
-                    for (int i = 0; i < 16; i++) cprintf("%02x ", src[i]);
-                    cprintf("\n");
-                }
-            }
-            
             memcpy(kva_dst, kva_src, PGSIZE);
-            
-            // Also ensure the written data is visible to child process
-            asm volatile("fence.i");
 
             ret = page_insert(to, npage, start, perm);
             assert(ret == 0);

@@ -8,13 +8,10 @@
 
 #define printf(...)                     fprintf(1, __VA_ARGS__)
 #define putc(c)                         printf("%c", c)
-// Debug printf that uses cprintf (sys_putc) instead of fprintf
-#define debugprintf(...)                cprintf(__VA_ARGS__)
 
 #define BUFSIZE                         4096
 #define WHITESPACE                      " \t\r\n"
 #define SYMBOLS                         "<|>&;"
-
 
 char shcwd[BUFSIZE];
 
@@ -206,21 +203,15 @@ runit:
         strcpy(shcwd, argv[1]);
         return 0;
     }
-    debugprintf("[SH-DBG] runcmd: argc=%d, argv[0]='%s'\n", argc, argv[0]);
     if ((ret = testfile(argv[0])) != 0) {
-        debugprintf("[SH-DBG] testfile ret=%d\n", ret);
         if (ret != -E_NOENT) {
             return ret;
         }
         snprintf(argv0, sizeof(argv0), "/%s", argv[0]);
         argv[0] = argv0;
-        debugprintf("[SH-DBG] modified argv[0]='%s'\n", argv[0]);
     }
     argv[argc] = NULL;
-    debugprintf("[SH-DBG] calling exec for '%s'\n", argv[0]);
-    ret = __exec(NULL, argv);
-    debugprintf("[SH-DBG] exec returned %d\n", ret);
-    return ret;
+    return __exec(NULL, argv);
 }
 
 int
@@ -244,18 +235,12 @@ main(int argc, char **argv) {
     while ((buffer = readline((interactive) ? "$ " : NULL)) != NULL) {
         shcwd[0] = '\0';
         int pid;
-        debugprintf("[SH-DBG] got command: '%s'\n", buffer);
         if ((pid = fork()) == 0) {
-            debugprintf("[SH-DBG] child process starting runcmd\n");
             ret = runcmd(buffer);
-            debugprintf("[SH-DBG] child runcmd returned %d, calling exit\n", ret);
             exit(ret);
         }
-        debugprintf("[SH-DBG] parent: fork returned pid=%d\n", pid);
         assert(pid >= 0);
-        int wait_ret = waitpid(pid, &ret);
-        debugprintf("[SH-DBG] parent: waitpid returned %d, ret=%d\n", wait_ret, ret);
-        if (wait_ret == 0) {
+        if (waitpid(pid, &ret) == 0) {
             if (ret == 0 && shcwd[0] != '\0') {
                 ret = 0;
             }
